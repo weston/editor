@@ -1054,7 +1054,10 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function terminalEnv(terminalId?: string): NodeJS.ProcessEnv {
+function terminalEnv(
+  terminalId?: string,
+  size?: { cols: number; rows: number },
+): NodeJS.ProcessEnv {
   const pairedTerminalId = terminalId
     ? pairedShellTerminalId(terminalId)
     : undefined;
@@ -1063,6 +1066,8 @@ function terminalEnv(terminalId?: string): NodeJS.ProcessEnv {
     PATH: editorPath(),
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
+    COLUMNS: size ? String(size.cols) : process.env.COLUMNS,
+    LINES: size ? String(size.rows) : process.env.LINES,
     CLICOLOR: "1",
     CLICOLOR_FORCE: "1",
     FORCE_COLOR: process.env.FORCE_COLOR ?? "3",
@@ -1233,14 +1238,22 @@ function startTerminal(
     return true;
   }
 
+  const size = normalizedTerminalSize(cols, rows);
   const shell = process.env.SHELL || "/bin/zsh";
-  const terminal = pty.spawn(shell, command ? ["-lc", command] : ["-l"], {
-    name: "xterm-256color",
-    cols,
-    rows,
-    cwd,
-    env: terminalEnv(terminalId),
-  });
+  const shellCommand = command
+    ? `stty cols ${size.cols} rows ${size.rows} 2>/dev/null || true; ${command}`
+    : undefined;
+  const terminal = pty.spawn(
+    shell,
+    shellCommand ? ["-lc", shellCommand] : ["-l"],
+    {
+      name: "xterm-256color",
+      cols: size.cols,
+      rows: size.rows,
+      cwd,
+      env: terminalEnv(terminalId, size),
+    },
+  );
 
   terminalProcesses.set(terminalId, terminal);
   sendTerminalEvent({
@@ -1276,6 +1289,13 @@ function startTerminal(
   });
 
   return true;
+}
+
+function normalizedTerminalSize(cols: number, rows: number) {
+  return {
+    cols: Math.max(20, Math.floor(Number.isFinite(cols) ? cols : 100)),
+    rows: Math.max(5, Math.floor(Number.isFinite(rows) ? rows : 30)),
+  };
 }
 
 function registerIpc() {
