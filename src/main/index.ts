@@ -14,6 +14,7 @@ import {
 import { randomUUID } from "node:crypto";
 import {
   appendFile,
+  chmod,
   cp,
   mkdir,
   readdir,
@@ -47,6 +48,7 @@ type StoredState = {
 
 const processes = new Map<string, ChildProcessWithoutNullStreams>();
 const terminalProcesses = new Map<string, pty.IPty>();
+const terminalInputStates = new Map<string, { input: string }>();
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -91,6 +93,22 @@ function terminalLogPath(terminalId: string) {
   );
 }
 
+function terminalCommandsPath(terminalId: string) {
+  return path.join(
+    app.getPath("userData"),
+    "terminal-commands",
+    `${terminalId.replace(/[^a-zA-Z0-9._-]/g, "_")}.jsonl`,
+  );
+}
+
+function editorBinDir() {
+  return path.join(app.getPath("userData"), "bin");
+}
+
+function editorTerminalHelperPath() {
+  return path.join(editorBinDir(), "editor-terminal");
+}
+
 async function readState(): Promise<StoredState> {
   try {
     const raw = await readFile(statePath(), "utf8");
@@ -121,6 +139,42 @@ function rememberRepo(state: StoredState, repoPath: string): StoredState {
 async function writeState(state: StoredState) {
   await mkdir(app.getPath("userData"), { recursive: true });
   await writeFile(statePath(), JSON.stringify(state, null, 2), "utf8");
+}
+
+async function ensureEditorTools() {
+  await mkdir(editorBinDir(), { recursive: true });
+  await writeFile(
+    editorTerminalHelperPath(),
+    `#!/bin/sh
+set -eu
+command_name="\${1:-lines}"
+count="\${2:-80}"
+
+case "$command_name" in
+  lines)
+    if [ -n "\${EDITOR_TERMINAL_LOG_PATH:-}" ] && [ -f "$EDITOR_TERMINAL_LOG_PATH" ]; then
+      tail -n "$count" "$EDITOR_TERMINAL_LOG_PATH"
+    fi
+    ;;
+  commands)
+    if [ -n "\${EDITOR_TERMINAL_COMMANDS_PATH:-}" ] && [ -f "$EDITOR_TERMINAL_COMMANDS_PATH" ]; then
+      tail -n "$count" "$EDITOR_TERMINAL_COMMANDS_PATH"
+    fi
+    ;;
+  paths)
+    printf 'EDITOR_SESSION_ID=%s\\n' "\${EDITOR_SESSION_ID:-}"
+    printf 'EDITOR_TERMINAL_LOG_PATH=%s\\n' "\${EDITOR_TERMINAL_LOG_PATH:-}"
+    printf 'EDITOR_TERMINAL_COMMANDS_PATH=%s\\n' "\${EDITOR_TERMINAL_COMMANDS_PATH:-}"
+    ;;
+  *)
+    printf 'usage: editor-terminal lines [count] | commands [count] | paths\\n' >&2
+    exit 2
+    ;;
+esac
+`,
+    "utf8",
+  );
+  await chmod(editorTerminalHelperPath(), 0o755);
 }
 
 function execGit(
@@ -894,22 +948,86 @@ async function appendTerminalOutput(terminalId: string, data: string) {
   await appendFile(logPath, data, "utf8");
 }
 
+async function appendTerminalCommand(terminalId: string, command: string) {
+  const commandsPath = terminalCommandsPath(terminalId);
+  await mkdir(path.dirname(commandsPath), { recursive: true });
+  await appendFile(
+    commandsPath,
+    `${JSON.stringify({ command, at: Date.now() })}\n`,
+    "utf8",
+  );
+}
+
+function recordTerminalInput(terminalId: string, data: string) {
+  if (!terminalId.startsWith("shell:")) {
+    return;
+  }
+
+  const state = terminalInputStates.get(terminalId) ?? { input: "" };
+  for (const char of data) {
+    if (char === "\r") {
+      const command = state.input.trimEnd();
+      state.input = "";
+      if (command.trim()) {
+        void appendTerminalCommand(terminalId, command);
+      }
+    } else if (char === "\u007f") {
+      state.input = state.input.slice(0, -1);
+    } else if (char === "\u0003") {
+      state.input = "";
+    } else if (char === "\n" || char === "\u001b") {
+      continue;
+    } else if (char >= " " || char === "\t") {
+      state.input += char;
+    }
+  }
+  terminalInputStates.set(terminalId, state);
+}
+
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function terminalEnv(): NodeJS.ProcessEnv {
+function terminalEnv(terminalId?: string): NodeJS.ProcessEnv {
+  const pairedTerminalId = terminalId
+    ? pairedShellTerminalId(terminalId)
+    : undefined;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    PATH: `${editorBinDir()}:${process.env.PATH ?? ""}`,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
     CLICOLOR: "1",
     CLICOLOR_FORCE: "1",
     FORCE_COLOR: process.env.FORCE_COLOR ?? "3",
+    EDITOR_SESSION_ID: terminalId ? sessionIdFromTerminalId(terminalId) : "",
+    EDITOR_TERMINAL_LOG_PATH: pairedTerminalId
+      ? terminalLogPath(pairedTerminalId)
+      : "",
+    EDITOR_TERMINAL_COMMANDS_PATH: pairedTerminalId
+      ? terminalCommandsPath(pairedTerminalId)
+      : "",
   };
 
   delete env.NO_COLOR;
   return env;
+}
+
+function pairedShellTerminalId(terminalId: string) {
+  const sessionId = sessionIdFromTerminalId(terminalId);
+  return sessionId ? `shell:${sessionId}` : "";
+}
+
+function sessionIdFromTerminalId(terminalId: string) {
+  if (terminalId.startsWith("shell:")) {
+    return terminalId.slice("shell:".length);
+  }
+
+  if (terminalId.startsWith("agent:")) {
+    return terminalId.split(":")[1] ?? "";
+  }
+
+  return "";
 }
 
 function startAgent(input: StartAgentInput) {
@@ -924,7 +1042,7 @@ function startAgent(input: StartAgentInput) {
   const shell = process.env.SHELL || "/bin/zsh";
   const child = spawn(shell, ["-lc", command], {
     cwd: input.cwd,
-    env: terminalEnv(),
+    env: terminalEnv(`agent:${input.sessionId}:${input.profile}`),
   });
 
   processes.set(input.sessionId, child);
@@ -1012,7 +1130,7 @@ function startTerminal(terminalId: string, cwd: string, command?: string) {
     cols: 100,
     rows: 30,
     cwd,
-    env: terminalEnv(),
+    env: terminalEnv(terminalId),
   });
 
   terminalProcesses.set(terminalId, terminal);
@@ -1125,6 +1243,7 @@ function registerIpc() {
         return false;
       }
 
+      recordTerminalInput(terminalId, data);
       child.write(data);
       return true;
     },
@@ -1159,6 +1278,7 @@ function registerIpc() {
 }
 
 app.whenReady().then(async () => {
+  await ensureEditorTools();
   registerIpc();
   await createWindow();
 

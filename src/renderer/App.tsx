@@ -4,6 +4,7 @@ import "@xterm/xterm/css/xterm.css";
 import {
   Archive,
   Check,
+  Bot,
   ExternalLink,
   FileText,
   GitFork,
@@ -16,7 +17,7 @@ import {
   Plus,
   RotateCcw,
   Redo2,
-  Send,
+  SquareTerminal,
   Trash2,
   Undo2,
   X,
@@ -66,20 +67,6 @@ type CachedTerminal = {
   fit: FitAddon;
 };
 
-type CommandBlock = {
-  id: string;
-  terminalId: string;
-  command: string;
-  output: string;
-  startedAt: number;
-  endedAt?: number;
-};
-
-type ShellCaptureState = {
-  input: string;
-  current?: CommandBlock;
-};
-
 type ShortcutTarget = "sidebar" | "agent" | "terminal";
 type Shortcuts = Record<ShortcutTarget, string>;
 type RightPaneMode = "terminal" | "notes";
@@ -115,10 +102,12 @@ export default function App() {
   });
   const [showArchived, setShowArchived] = useState(false);
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("terminal");
-  const [commandBlocks, setCommandBlocks] = useState<CommandBlock[]>([]);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showPrMenu, setShowPrMenu] = useState(false);
   const [focusedPanel, setFocusedPanel] = useState<ShortcutTarget>("agent");
+  const [exitedTerminalIds, setExitedTerminalIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [finishedAgentIds, setFinishedAgentIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -138,7 +127,6 @@ export default function App() {
   const mountedShellRef = useRef<MountedTerminal | null>(null);
   const terminalsRef = useRef(new Map<string, Terminal>());
   const terminalCacheRef = useRef(new Map<string, CachedTerminal>());
-  const shellCaptureRef = useRef(new Map<string, ShellCaptureState>());
   const graphiteUrlsRef = useRef(new Map<string, string[]>());
   const graphiteDetectionRef = useRef(new Set<string>());
   const shortcutsRef = useRef(shortcuts);
@@ -194,13 +182,6 @@ export default function App() {
   const activeShellTerminalId = activeSession
     ? shellTerminalId(activeSession.id)
     : "";
-  const terminalHistory = useMemo(
-    () =>
-      commandBlocks
-        .filter((block) => block.terminalId === activeShellTerminalId)
-        .slice(0, 8),
-    [activeShellTerminalId, commandBlocks],
-  );
   const workspaceGridStyle: CSSProperties = {
     gridTemplateColumns: `minmax(320px, ${splitPercent}%) 8px minmax(280px, 1fr)`,
   };
@@ -382,6 +363,7 @@ export default function App() {
 
     if (event.type === "exit") {
       terminal.write(`\r\n[exited ${event.code ?? event.signal ?? 0}]\r\n`);
+      setExitedTerminalIds((current) => new Set(current).add(event.terminalId));
       markAgentFinished(event.terminalId);
       return;
     }
@@ -393,7 +375,6 @@ export default function App() {
 
     const data = event.data ?? "";
     terminal.write(data);
-    recordShellOutput(event.terminalId, data);
     captureGraphiteUrl(event.terminalId, data);
   }
 
@@ -488,9 +469,6 @@ export default function App() {
       handleTerminalKeyEvent(event, terminalId, terminal),
     );
     terminal.onData((data) => {
-      if (terminalId.startsWith("shell:")) {
-        recordShellInput(terminalId, data);
-      }
       window.agentEditor
         .sendTerminalInput(terminalId, data)
         .catch(() => undefined);
@@ -814,57 +792,6 @@ export default function App() {
     ]);
   }
 
-  function recordShellInput(terminalId: string, data: string) {
-    const state = shellCaptureRef.current.get(terminalId) ?? { input: "" };
-
-    for (const char of data) {
-      if (char === "\r") {
-        const command = state.input.trimEnd();
-        state.input = "";
-
-        if (command.trim()) {
-          const block: CommandBlock = {
-            id: `${terminalId}:${Date.now()}`,
-            terminalId,
-            command,
-            output: "",
-            startedAt: Date.now(),
-          };
-          state.current = block;
-          setCommandBlocks((current) => [block, ...current].slice(0, 80));
-        }
-      } else if (char === "\u007f") {
-        state.input = state.input.slice(0, -1);
-      } else if (char === "\u0003") {
-        state.input = "";
-      } else if (char === "\n" || char === "\u001b") {
-        continue;
-      } else if (char >= " " || char === "\t") {
-        state.input += char;
-      }
-    }
-
-    shellCaptureRef.current.set(terminalId, state);
-  }
-
-  function recordShellOutput(terminalId: string, data: string) {
-    if (!terminalId.startsWith("shell:") || !data) {
-      return;
-    }
-
-    const state = shellCaptureRef.current.get(terminalId);
-    const block = state?.current;
-    if (!block) {
-      return;
-    }
-
-    block.output = `${block.output}${data}`.slice(-240_000);
-    block.endedAt = Date.now();
-    setCommandBlocks((current) =>
-      current.map((item) => (item.id === block.id ? { ...block } : item)),
-    );
-  }
-
   function captureGraphiteUrl(terminalId: string, data: string) {
     const sessionId = sessionIdFromTerminalId(terminalId);
     if (!sessionId || !data.includes("graphite.dev")) {
@@ -900,28 +827,9 @@ export default function App() {
       .catch(() => undefined);
   }
 
-  function sendBlockToAgent(block: CommandBlock | undefined) {
-    if (!block || !activeAgentTerminalId) {
-      return;
-    }
-
-    const text = commandBlockText(block);
-    window.agentEditor
-      .sendTerminalInput(activeAgentTerminalId, text)
-      .then(() => focusPanel("agent"))
-      .catch(() => undefined);
-  }
-
-  function sendRightPaneSelectionToAgent() {
-    if (!activeAgentTerminalId) {
-      return;
-    }
-
-    const text =
-      rightPaneMode === "notes"
-        ? selectedNotesText(notesEditorRef.current)
-        : selectedTerminalText(terminalsRef.current.get(activeShellTerminalId));
-    if (!text) {
+  function copySelectionToAgent() {
+    const text = selectedTextFromFocusedPane();
+    if (!text || !activeAgentTerminalId) {
       return;
     }
 
@@ -931,15 +839,9 @@ export default function App() {
       .catch(() => undefined);
   }
 
-  function sendAgentSelectionToTerminal() {
-    if (!activeShellTerminalId) {
-      return;
-    }
-
-    const text = selectedTerminalText(
-      terminalsRef.current.get(activeAgentTerminalId),
-    );
-    if (!text) {
+  function copySelectionToTerminal() {
+    const text = selectedTextFromFocusedPane();
+    if (!text || !activeShellTerminalId) {
       return;
     }
 
@@ -948,6 +850,72 @@ export default function App() {
       .then(() => {
         setRightPaneMode("terminal");
         focusPanel("terminal");
+      })
+      .catch(() => undefined);
+  }
+
+  function copySelectionToNotes() {
+    const text = selectedTextFromFocusedPane();
+    if (!text || !activeSession) {
+      return;
+    }
+
+    const currentNotes = activeSession.notes ?? "";
+    updateSessionNotes(
+      activeSession,
+      currentNotes ? `${currentNotes}\n${text}` : text,
+    );
+    setRightPaneMode("notes");
+  }
+
+  function selectedTextFromFocusedPane() {
+    if (document.activeElement === notesEditorRef.current) {
+      return selectedNotesText(notesEditorRef.current);
+    }
+
+    if (focusedPanel === "agent") {
+      return selectedTerminalText(
+        terminalsRef.current.get(activeAgentTerminalId),
+      );
+    }
+
+    if (rightPaneMode === "notes") {
+      return selectedNotesText(notesEditorRef.current);
+    }
+
+    return selectedTerminalText(
+      terminalsRef.current.get(activeShellTerminalId),
+    );
+  }
+
+  function restartAgentTerminal() {
+    if (!activeSession || !activeAgentTerminalId) {
+      return;
+    }
+
+    const cached = terminalCacheRef.current.get(activeAgentTerminalId);
+    cached?.terminal.write("\r\n[restarting]\r\n");
+    window.agentEditor
+      .startTerminal(
+        activeAgentTerminalId,
+        activeSession.worktreePath,
+        agentCommand,
+      )
+      .then(() => {
+        setExitedTerminalIds((current) => {
+          const next = new Set(current);
+          next.delete(activeAgentTerminalId);
+          return next;
+        });
+        if (cached) {
+          window.agentEditor
+            .resizeTerminal(
+              activeAgentTerminalId,
+              cached.terminal.cols,
+              cached.terminal.rows,
+            )
+            .catch(() => undefined);
+        }
       })
       .catch(() => undefined);
   }
@@ -1170,7 +1138,11 @@ export default function App() {
                       }
                     }}
                   />
-                  <button onClick={() => renameSession(session.id)}>
+                  <button
+                    onClick={() => renameSession(session.id)}
+                    data-tooltip="Save"
+                    aria-label="Save"
+                  >
                     <Check size={14} />
                   </button>
                   <button
@@ -1178,6 +1150,8 @@ export default function App() {
                       setEditingSessionId("");
                       setEditingSessionName("");
                     }}
+                    data-tooltip="Cancel"
+                    aria-label="Cancel"
                   >
                     <X size={14} />
                   </button>
@@ -1197,7 +1171,11 @@ export default function App() {
                       }
                     }}
                   />
-                  <button onClick={() => forkSession(session)}>
+                  <button
+                    onClick={() => forkSession(session)}
+                    data-tooltip="Create fork"
+                    aria-label="Create fork"
+                  >
                     <Check size={14} />
                   </button>
                   <button
@@ -1205,6 +1183,8 @@ export default function App() {
                       setForkingSessionId("");
                       setForkSessionName("");
                     }}
+                    data-tooltip="Cancel"
+                    aria-label="Cancel"
                   >
                     <X size={14} />
                   </button>
@@ -1251,13 +1231,19 @@ export default function App() {
                     />
                     Archive
                   </label>
-                  <button onClick={() => closeSession(session)}>
+                  <button
+                    onClick={() => closeSession(session)}
+                    data-tooltip="Confirm close"
+                    aria-label="Confirm close"
+                  >
                     <Check size={14} />
                   </button>
                   <button
                     onClick={() => {
                       setClosingSessionId("");
                     }}
+                    data-tooltip="Cancel"
+                    aria-label="Cancel"
                   >
                     <X size={14} />
                   </button>
@@ -1273,12 +1259,20 @@ export default function App() {
                   </button>
                   <div className="session-actions">
                     {session.archived ? (
-                      <button onClick={() => reviveSession(session)}>
+                      <button
+                        onClick={() => reviveSession(session)}
+                        data-tooltip="Revive"
+                        aria-label="Revive"
+                      >
                         <RotateCcw size={13} />
                       </button>
                     ) : (
                       <>
-                        <button onClick={() => togglePinned(session)}>
+                        <button
+                          onClick={() => togglePinned(session)}
+                          data-tooltip={session.pinned ? "Unpin" : "Pin"}
+                          aria-label={session.pinned ? "Unpin" : "Pin"}
+                        >
                           {session.pinned ? (
                             <PinOff size={13} />
                           ) : (
@@ -1293,6 +1287,8 @@ export default function App() {
                             setConfirmingDeleteId("");
                             setClosingSessionId("");
                           }}
+                          data-tooltip="Fork"
+                          aria-label="Fork"
                         >
                           <GitFork size={13} />
                         </button>
@@ -1304,6 +1300,8 @@ export default function App() {
                             setConfirmingDeleteId("");
                             setClosingSessionId("");
                           }}
+                          data-tooltip="Rename"
+                          aria-label="Rename"
                         >
                           <Pencil size={13} />
                         </button>
@@ -1319,15 +1317,25 @@ export default function App() {
                             setForkingSessionId("");
                             setConfirmingDeleteId("");
                           }}
+                          data-tooltip="Close"
+                          aria-label="Close"
                         >
                           <Archive size={13} />
                         </button>
                         {confirmingDeleteId === session.id ? (
                           <>
-                            <button onClick={() => deleteSession(session.id)}>
+                            <button
+                              onClick={() => deleteSession(session.id)}
+                              data-tooltip="Confirm delete"
+                              aria-label="Confirm delete"
+                            >
                               <Check size={13} />
                             </button>
-                            <button onClick={() => setConfirmingDeleteId("")}>
+                            <button
+                              onClick={() => setConfirmingDeleteId("")}
+                              data-tooltip="Cancel"
+                              aria-label="Cancel"
+                            >
                               <X size={13} />
                             </button>
                           </>
@@ -1339,6 +1347,8 @@ export default function App() {
                               setForkingSessionId("");
                               setClosingSessionId("");
                             }}
+                            data-tooltip="Delete"
+                            aria-label="Delete"
                           >
                             <Trash2 size={13} />
                           </button>
@@ -1384,6 +1394,32 @@ export default function App() {
                 Graphite
               </button>
             ) : null}
+            <div className="transfer-actions">
+              <button
+                onClick={copySelectionToAgent}
+                disabled={!activeSession}
+                data-tooltip="Copy selection to Agent"
+                aria-label="Copy selection to Agent"
+              >
+                <Bot size={14} />
+              </button>
+              <button
+                onClick={copySelectionToTerminal}
+                disabled={!activeSession}
+                data-tooltip="Copy selection to Terminal"
+                aria-label="Copy selection to Terminal"
+              >
+                <SquareTerminal size={14} />
+              </button>
+              <button
+                onClick={copySelectionToNotes}
+                disabled={!activeSession}
+                data-tooltip="Copy selection to Notes"
+                aria-label="Copy selection to Notes"
+              >
+                <FileText size={14} />
+              </button>
+            </div>
             {showPrMenu ? (
               <div className="pr-menu">
                 {activeGraphitePrUrls.map((url, index) => (
@@ -1465,13 +1501,16 @@ export default function App() {
               </div>
               <div className="agent-tools">
                 <span>{agentCommand}</span>
-                <button
-                  onClick={sendAgentSelectionToTerminal}
-                  disabled={!activeSession}
-                  title="Send selection to terminal"
-                >
-                  <Send size={13} />
-                </button>
+                {exitedTerminalIds.has(activeAgentTerminalId) ? (
+                  <button
+                    onClick={restartAgentTerminal}
+                    disabled={!activeSession}
+                    data-tooltip="Restart agent"
+                    aria-label="Restart agent"
+                  >
+                    <RotateCcw size={13} />
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="xterm-host" ref={agentContainerRef} />
@@ -1502,24 +1541,6 @@ export default function App() {
                 </button>
               </div>
               <div className="terminal-tools">
-                <button
-                  onClick={() => sendBlockToAgent(terminalHistory[0])}
-                  disabled={
-                    !activeSession ||
-                    rightPaneMode !== "terminal" ||
-                    terminalHistory.length === 0
-                  }
-                  title="Send last command"
-                >
-                  <Send size={13} />
-                </button>
-                <button
-                  onClick={sendRightPaneSelectionToAgent}
-                  disabled={!activeSession}
-                  title="Send selection"
-                >
-                  <FileText size={13} />
-                </button>
                 {rightPaneMode === "notes" ? (
                   <>
                     <button
@@ -1630,22 +1651,26 @@ function commandForAgent(session: SessionRecord, profile: AgentProfile) {
   if (profile.id === "claude") {
     const claudeSessionId = session.agentSessions?.claude;
     if (claudeSessionId) {
+      const promptFlag = ` --append-system-prompt ${shellQuote(terminalAccessPrompt())}`;
       return session.forkedAgentSessions?.claude
-        ? `claude --resume ${shellQuote(claudeSessionId)}`
-        : `claude --session-id ${shellQuote(claudeSessionId)}`;
+        ? `claude --resume ${shellQuote(claudeSessionId)}${promptFlag}`
+        : `claude --session-id ${shellQuote(claudeSessionId)}${promptFlag}`;
     }
+  }
+
+  if (profile.id === "codex") {
+    return `codex ${shellQuote(terminalAccessPrompt())}`;
   }
 
   return profile.command;
 }
 
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
+function terminalAccessPrompt() {
+  return "You are running inside Editor. You can inspect the paired terminal for this session by running `editor-terminal lines 200` for recent terminal output, `editor-terminal commands 20` for recent commands, or `editor-terminal paths` for the backing files.";
 }
 
-function commandBlockText(block: CommandBlock) {
-  const output = stripTerminalControl(block.output).trim();
-  return output ? `$ ${block.command}\n${output}` : `$ ${block.command}`;
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function applyStoredNotesDraft(session: SessionRecord): SessionRecord {

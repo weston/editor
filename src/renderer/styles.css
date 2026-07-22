@@ -33,6 +33,7 @@ textarea {
 }
 
 button {
+  position: relative;
   border: 0;
   cursor: default;
 }
@@ -41,6 +42,31 @@ button:disabled,
 input:disabled,
 textarea:disabled {
   opacity: 0.42;
+}
+
+button[data-tooltip]:hover::after {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  width: max-content;
+  max-width: 190px;
+  padding: 5px 7px;
+  border: 1px solid #353535;
+  border-radius: 6px;
+  background: #1d1d1d;
+  color: #eeeeee;
+  content: attr(data-tooltip);
+  font-size: 11px;
+  line-height: 1.2;
+  pointer-events: none;
+  text-align: center;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+button[data-tooltip]:disabled:hover::after {
+  display: none;
 }
 
 .app-shell {
@@ -385,6 +411,31 @@ textarea {
   align-items: center;
   gap: 6px;
   -webkit-app-region: no-drag;
+}
+
+.transfer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  background: #101010;
+}
+
+.transfer-actions button {
+  display: grid;
+  width: 28px;
+  height: 26px;
+  place-items: center;
+  border-radius: 7px;
+  background: transparent;
+  color: #a6a6a6;
+}
+
+.transfer-actions button:hover {
+  background: #242424;
+  color: #ececec;
 }
 
 .workspace-title {
