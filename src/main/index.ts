@@ -190,6 +190,10 @@ function execGit(
   return execFileText("git", args, cwd, maxBuffer);
 }
 
+function execEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, PATH: editorPath() };
+}
+
 function execFileText(
   command: string,
   args: string[],
@@ -200,7 +204,7 @@ function execFileText(
     execFile(
       command,
       args,
-      { cwd, maxBuffer, timeout: 20_000 },
+      { cwd, maxBuffer, timeout: 20_000, env: execEnv() },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(stderr.trim() || error.message));
@@ -255,6 +259,7 @@ async function syncWorktreeToSailbox(
     const tar = spawn("tar", ["--exclude", ".git", "-czf", "-", "."], {
       cwd: worktreePath,
       stdio: ["ignore", "pipe", "pipe"],
+      env: execEnv(),
     });
     const sail = spawn(
       "sail",
@@ -270,6 +275,7 @@ async function syncWorktreeToSailbox(
       {
         cwd: worktreePath,
         stdio: ["pipe", "pipe", "pipe"],
+        env: execEnv(),
       },
     );
     const stderr: Buffer[] = [];
