@@ -1746,7 +1746,7 @@ export default function App() {
                 ))}
               </div>
               <div className="agent-tools">
-                <span>{agentCommand}</span>
+                <span>{currentProfile.command}</span>
                 {exitedTerminalIds.has(activeAgentTerminalId) ? (
                   <button
                     onClick={restartAgentTerminal}
@@ -1899,10 +1899,10 @@ function commandForAgent(session: SessionRecord, profile: AgentProfile) {
   if (profile.id === "claude") {
     const claudeSessionId = session.agentSessions?.claude;
     if (claudeSessionId) {
-      const promptFlag = ` --append-system-prompt ${shellQuote(terminalAccessPrompt(session.target))}`;
-      command = session.forkedAgentSessions?.claude
-        ? `claude --dangerously-skip-permissions --resume ${shellQuote(claudeSessionId)}${promptFlag}`
-        : `claude --dangerously-skip-permissions --session-id ${shellQuote(claudeSessionId)}${promptFlag}`;
+      const base = `claude --dangerously-skip-permissions --append-system-prompt ${shellQuote(terminalAccessPrompt(session.target))}`;
+      const quotedId = shellQuote(claudeSessionId);
+      const transcriptName = shellQuote(`${claudeSessionId}.jsonl`);
+      command = `if find "$HOME/.claude/projects" -name ${transcriptName} 2>/dev/null | grep -q .; then ${base} --resume ${quotedId}; else ${base} --session-id ${quotedId}; fi`;
     }
   }
 
