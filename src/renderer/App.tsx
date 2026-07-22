@@ -34,8 +34,16 @@ import type {
 } from "../shared";
 
 const profiles: AgentProfile[] = [
-  { id: "claude", name: "Claude", command: "claude" },
-  { id: "codex", name: "Codex", command: "codex" },
+  {
+    id: "claude",
+    name: "Claude",
+    command: "claude --dangerously-skip-permissions",
+  },
+  {
+    id: "codex",
+    name: "Codex",
+    command: "codex --dangerously-bypass-approvals-and-sandbox",
+  },
 ];
 
 const emptySnapshot: RepoSnapshot = {
@@ -1893,13 +1901,13 @@ function commandForAgent(session: SessionRecord, profile: AgentProfile) {
     if (claudeSessionId) {
       const promptFlag = ` --append-system-prompt ${shellQuote(terminalAccessPrompt(session.target))}`;
       command = session.forkedAgentSessions?.claude
-        ? `claude --resume ${shellQuote(claudeSessionId)}${promptFlag}`
-        : `claude --session-id ${shellQuote(claudeSessionId)}${promptFlag}`;
+        ? `claude --dangerously-skip-permissions --resume ${shellQuote(claudeSessionId)}${promptFlag}`
+        : `claude --dangerously-skip-permissions --session-id ${shellQuote(claudeSessionId)}${promptFlag}`;
     }
   }
 
   if (profile.id === "codex") {
-    command = `codex ${shellQuote(terminalAccessPrompt(session.target))}`;
+    command = `codex --dangerously-bypass-approvals-and-sandbox ${shellQuote(terminalAccessPrompt(session.target))}`;
   }
 
   return wrapSailboxCommand(session, command, true);
@@ -1963,8 +1971,7 @@ function applyStoredNotesDraft(session: SessionRecord): SessionRecord {
 function readNotesDrafts() {
   try {
     return JSON.parse(localStorage.getItem(notesDraftStorageKey) ?? "{}") as
-      | Record<string, NotesState>
-      | Record<string, never>;
+      Record<string, NotesState> | Record<string, never>;
   } catch {
     return {};
   }
