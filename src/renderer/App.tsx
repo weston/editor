@@ -60,6 +60,7 @@ const graphiteUrlPattern = /https:\/\/(?:app\.)?graphite\.dev\/[^\s"'<>)]*/g;
 
 type MountedTerminal = {
   id: string;
+  container: HTMLDivElement;
   resizeObserver: ResizeObserver;
   animationFrames: number[];
 };
@@ -457,33 +458,79 @@ export default function App() {
     } else {
       cached.terminal.open(container);
     }
-    fitAndResizeTerminal(terminalId, cached);
+    fitAndResizeTerminal(terminalId, cached, container);
     cached.terminal.focus();
 
     const resizeObserver = new ResizeObserver(() => {
-      fitAndResizeTerminal(terminalId, cached);
+      fitAndResizeTerminal(terminalId, cached, container);
     });
     resizeObserver.observe(container);
 
     const animationFrames = [
-      requestAnimationFrame(() => fitAndResizeTerminal(terminalId, cached)),
+      requestAnimationFrame(() =>
+        fitAndResizeTerminal(terminalId, cached, container),
+      ),
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => fitAndResizeTerminal(terminalId, cached));
+        requestAnimationFrame(() =>
+          fitAndResizeTerminal(terminalId, cached, container),
+        );
       }),
     ];
 
     return {
       id: terminalId,
+      container,
       resizeObserver,
       animationFrames,
     };
   }
 
-  function fitAndResizeTerminal(terminalId: string, cached: CachedTerminal) {
+  function fitAndResizeTerminal(
+    terminalId: string,
+    cached: CachedTerminal,
+    container?: HTMLDivElement,
+  ) {
     cached.fit.fit();
+    clampTerminalColumns(cached, container);
     window.agentEditor
       .resizeTerminal(terminalId, cached.terminal.cols, cached.terminal.rows)
       .catch(() => undefined);
+  }
+
+  function clampTerminalColumns(
+    cached: CachedTerminal,
+    container?: HTMLDivElement,
+  ) {
+    if (!container || !cached.terminal.element) {
+      return;
+    }
+
+    const screen = cached.terminal.element.querySelector(".xterm-screen");
+    if (!(screen instanceof HTMLElement)) {
+      return;
+    }
+
+    const available = terminalContentWidth(container);
+    const rendered = screen.getBoundingClientRect().width;
+    if (rendered <= available + 1 || cached.terminal.cols <= 20) {
+      return;
+    }
+
+    const nextCols = Math.max(
+      20,
+      Math.floor((cached.terminal.cols * available) / rendered) - 1,
+    );
+    if (nextCols < cached.terminal.cols) {
+      cached.terminal.resize(nextCols, cached.terminal.rows);
+    }
+  }
+
+  function terminalContentWidth(container: HTMLDivElement) {
+    const style = window.getComputedStyle(container);
+    const padding =
+      Number.parseFloat(style.paddingLeft) +
+      Number.parseFloat(style.paddingRight);
+    return Math.max(20, container.clientWidth - padding);
   }
 
   function refitMountedTerminal(mounted: MountedTerminal | null) {
@@ -497,7 +544,7 @@ export default function App() {
     }
 
     requestAnimationFrame(() => {
-      fitAndResizeTerminal(mounted.id, cached);
+      fitAndResizeTerminal(mounted.id, cached, mounted.container);
     });
   }
 
