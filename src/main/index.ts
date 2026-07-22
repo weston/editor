@@ -52,6 +52,8 @@ const terminalInputStates = new Map<string, { input: string }>();
 
 let mainWindow: BrowserWindow | null = null;
 
+app.setName("Editor");
+
 const agentCommands: Record<AgentProfileId, (prompt: string) => string> = {
   codex: (prompt) => `codex exec ${shellQuote(prompt)}`,
   claude: (prompt) => `claude -p ${shellQuote(prompt)}`,
@@ -65,6 +67,7 @@ async function createWindow() {
     height: 860,
     minWidth: 1040,
     minHeight: 700,
+    title: "Editor",
     titleBarStyle: "hiddenInset",
     backgroundColor: "#111318",
     webPreferences: {

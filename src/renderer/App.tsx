@@ -1059,7 +1059,7 @@ export default function App() {
         <div className="drag-zone" />
 
         <div className="sidebar-top">
-          <h1>Agent Editor</h1>
+          <h1>Editor</h1>
         </div>
 
         <div className="sidebar-actions">
