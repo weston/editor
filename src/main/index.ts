@@ -79,6 +79,10 @@ async function createWindow() {
     },
   });
 
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+
   if (process.env.VITE_DEV_SERVER_URL) {
     await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
@@ -1007,11 +1011,23 @@ function linearIssueFromResponse(issue: LinearIssueResponse): LinearIssue {
 }
 
 function sendAgentEvent(event: AgentEvent) {
-  mainWindow?.webContents.send("agent:event", event);
+  sendRendererEvent("agent:event", event);
 }
 
 function sendTerminalEvent(event: TerminalEvent) {
-  mainWindow?.webContents.send("terminal:event", event);
+  sendRendererEvent("terminal:event", event);
+}
+
+function sendRendererEvent(channel: string, event: unknown) {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    mainWindow.webContents.isDestroyed()
+  ) {
+    return;
+  }
+
+  mainWindow.webContents.send(channel, event);
 }
 
 async function appendTerminalOutput(terminalId: string, data: string) {
