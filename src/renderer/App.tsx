@@ -65,7 +65,8 @@ const shortcutStorageKey = "agent-editor:shortcuts";
 const splitStorageKey = "agent-editor:panel-split";
 const notesDraftStorageKey = "agent-editor:note-drafts";
 const graphiteUrlPattern = /https:\/\/(?:app\.)?graphite\.dev\/[^\s"'<>)]*/g;
-const agentIdleAfterMs = 2500;
+const agentIdleAfterMs = 4000;
+const typingEchoMs = 1500;
 let measuredCellWidthCache = 0;
 
 type MountedTerminal = {
@@ -158,6 +159,8 @@ export default function App() {
   const activeAgentTerminalIdRef = useRef("");
   const notesSaveTimersRef = useRef(new Map<string, number>());
   const agentOutputAtRef = useRef(new Map<string, number>());
+  const agentInputAtRef = useRef(new Map<string, number>());
+  const agentInteractedRef = useRef(new Set<string>());
   const workingAgentIdsRef = useRef<Set<string>>(new Set());
 
   const activeSession = useMemo(
@@ -268,7 +271,7 @@ export default function App() {
       for (const terminalId of previous) {
         if (!next.has(terminalId)) {
           changed = true;
-          markAgentFinished(terminalId);
+          markAgentReady(terminalId);
         }
       }
       if (!changed) {
@@ -465,8 +468,9 @@ export default function App() {
       terminal.write(`\r\n[exited ${event.code ?? event.signal ?? 0}]\r\n`);
       startedTerminalIdsRef.current.delete(event.terminalId);
       agentOutputAtRef.current.delete(event.terminalId);
+      agentInputAtRef.current.delete(event.terminalId);
+      agentInteractedRef.current.delete(event.terminalId);
       setExitedTerminalIds((current) => new Set(current).add(event.terminalId));
-      markAgentFinished(event.terminalId);
       return;
     }
 
@@ -478,20 +482,34 @@ export default function App() {
     const data = event.data ?? "";
     terminal.write(data);
     if (data && event.terminalId.startsWith("agent:")) {
-      agentOutputAtRef.current.set(event.terminalId, Date.now());
+      const inputAt = agentInputAtRef.current.get(event.terminalId) ?? 0;
+      if (Date.now() - inputAt > typingEchoMs) {
+        agentOutputAtRef.current.set(event.terminalId, Date.now());
+      }
     }
     captureGraphiteUrl(event.terminalId, data);
   }
 
-  function markAgentFinished(terminalId: string) {
+  function recordAgentInput(terminalId: string, data: string) {
     if (!terminalId.startsWith("agent:")) {
       return;
     }
 
-    const isVisibleAgent =
-      terminalId === activeAgentTerminalIdRef.current &&
-      focusedPanelRef.current === "agent";
-    if (isVisibleAgent) {
+    if (data.startsWith("\u001b")) {
+      agentInputAtRef.current.set(terminalId, Date.now());
+      return;
+    }
+
+    agentInputAtRef.current.set(terminalId, Date.now());
+    agentInteractedRef.current.add(terminalId);
+  }
+
+  function markAgentReady(terminalId: string) {
+    if (!agentInteractedRef.current.delete(terminalId)) {
+      return;
+    }
+
+    if (sessionIdFromTerminalId(terminalId) === activeSessionIdRef.current) {
       return;
     }
 
@@ -706,6 +724,7 @@ export default function App() {
       handleTerminalKeyEvent(event, terminalId, terminal),
     );
     terminal.onData((data) => {
+      recordAgentInput(terminalId, data);
       window.agentEditor
         .sendTerminalInput(terminalId, data)
         .catch(() => undefined);
@@ -724,6 +743,21 @@ export default function App() {
   ) {
     if (event.type !== "keydown") {
       return true;
+    }
+
+    if (
+      event.key === "Enter" &&
+      event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      terminalId.startsWith("agent:")
+    ) {
+      recordAgentInput(terminalId, "\r");
+      window.agentEditor
+        .sendTerminalInput(terminalId, "\u001b\r")
+        .catch(() => undefined);
+      return false;
     }
 
     if (event.metaKey && normalizeKey(event.key) === "C") {
@@ -1084,6 +1118,7 @@ export default function App() {
       return;
     }
 
+    recordAgentInput(activeAgentTerminalId, text);
     window.agentEditor
       .sendTerminalInput(activeAgentTerminalId, text)
       .then(() => focusPanel("agent"))
