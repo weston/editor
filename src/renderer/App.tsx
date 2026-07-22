@@ -1,0 +1,1636 @@
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
+import {
+  Archive,
+  Check,
+  Copy,
+  ExternalLink,
+  FileText,
+  GitFork,
+  GitPullRequest,
+  History,
+  Keyboard,
+  Link2,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  RotateCcw,
+  Send,
+  Trash2,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import type {
+  AgentProfile,
+  AgentProfileId,
+  RepoSnapshot,
+  SessionRecord,
+  TerminalEvent,
+} from "../shared";
+
+const profiles: AgentProfile[] = [
+  { id: "claude", name: "Claude", command: "claude" },
+  { id: "codex", name: "Codex", command: "codex" },
+];
+
+const emptySnapshot: RepoSnapshot = {
+  repoPath: "",
+  rootPath: "",
+  branch: "",
+  status: "",
+  diffStat: "",
+  diff: "",
+};
+
+const defaultShortcuts: Shortcuts = {
+  sidebar: "Meta+1",
+  agent: "Meta+2",
+  terminal: "Meta+3",
+};
+
+const shortcutStorageKey = "agent-editor:shortcuts";
+const splitStorageKey = "agent-editor:panel-split";
+const graphiteUrlPattern = /https:\/\/(?:app\.)?graphite\.dev\/[^\s"'<>)]*/g;
+
+type MountedTerminal = {
+  id: string;
+  resizeObserver: ResizeObserver;
+};
+
+type CachedTerminal = {
+  terminal: Terminal;
+  fit: FitAddon;
+};
+
+type CommandBlock = {
+  id: string;
+  terminalId: string;
+  command: string;
+  output: string;
+  startedAt: number;
+  endedAt?: number;
+};
+
+type ShellCaptureState = {
+  input: string;
+  current?: CommandBlock;
+};
+
+type ShortcutTarget = "sidebar" | "agent" | "terminal";
+type Shortcuts = Record<ShortcutTarget, string>;
+type RightPaneMode = "terminal" | "notes";
+type CloseOptions = {
+  linear: boolean;
+  git: boolean;
+  archive: boolean;
+};
+
+export default function App() {
+  const [repo, setRepo] = useState<RepoSnapshot>(emptySnapshot);
+  const [recentRepoPaths, setRecentRepoPaths] = useState<string[]>([]);
+  const [sessions, setSessions] = useState<SessionRecord[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string>("");
+  const [profile, setProfile] = useState<AgentProfileId>("claude");
+  const [showNewSession, setShowNewSession] = useState(false);
+  const [sessionName, setSessionName] = useState("");
+  const [editingSessionId, setEditingSessionId] = useState("");
+  const [editingSessionName, setEditingSessionName] = useState("");
+  const [forkingSessionId, setForkingSessionId] = useState("");
+  const [forkSessionName, setForkSessionName] = useState("");
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState("");
+  const [closingSessionId, setClosingSessionId] = useState("");
+  const [closeOptions, setCloseOptions] = useState<CloseOptions>({
+    linear: true,
+    git: true,
+    archive: true,
+  });
+  const [showArchived, setShowArchived] = useState(false);
+  const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("terminal");
+  const [commandBlocks, setCommandBlocks] = useState<CommandBlock[]>([]);
+  const [showCommandHistory, setShowCommandHistory] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showPrMenu, setShowPrMenu] = useState(false);
+  const [focusedPanel, setFocusedPanel] = useState<ShortcutTarget>("agent");
+  const [finishedAgentIds, setFinishedAgentIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [capturingShortcut, setCapturingShortcut] =
+    useState<ShortcutTarget | null>(null);
+  const [shortcuts, setShortcuts] = useState<Shortcuts>(loadShortcuts);
+  const [splitPercent, setSplitPercent] = useState(loadSplitPercent);
+  const [error, setError] = useState("");
+  const sidebarRef = useRef<HTMLElement>(null);
+  const topbarActionsRef = useRef<HTMLDivElement>(null);
+  const workspaceGridRef = useRef<HTMLDivElement>(null);
+  const terminalPanelRef = useRef<HTMLElement>(null);
+  const agentContainerRef = useRef<HTMLDivElement>(null);
+  const shellContainerRef = useRef<HTMLDivElement>(null);
+  const mountedAgentRef = useRef<MountedTerminal | null>(null);
+  const mountedShellRef = useRef<MountedTerminal | null>(null);
+  const terminalsRef = useRef(new Map<string, Terminal>());
+  const terminalCacheRef = useRef(new Map<string, CachedTerminal>());
+  const shellCaptureRef = useRef(new Map<string, ShellCaptureState>());
+  const graphiteUrlsRef = useRef(new Map<string, string[]>());
+  const graphiteDetectionRef = useRef(new Set<string>());
+  const shortcutsRef = useRef(shortcuts);
+  const focusedPanelRef = useRef<ShortcutTarget>("agent");
+  const activeSessionIdRef = useRef("");
+  const activeAgentTerminalIdRef = useRef("");
+  const notesSaveTimersRef = useRef(new Map<string, number>());
+
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId),
+    [activeSessionId, sessions],
+  );
+  const orderedSessions = useMemo(
+    () =>
+      [...sessions].sort((left, right) => {
+        if (Boolean(left.pinned) !== Boolean(right.pinned)) {
+          return left.pinned ? -1 : 1;
+        }
+
+        return right.updatedAt - left.updatedAt;
+      }),
+    [sessions],
+  );
+  const visibleSessions = useMemo(
+    () =>
+      orderedSessions.filter((session) =>
+        showArchived ? session.archived : !session.archived,
+      ),
+    [orderedSessions, showArchived],
+  );
+  const currentProfile =
+    profiles.find((item) => item.id === profile) ?? profiles[0];
+  const activeContext = activeSession?.id || repo.rootPath || "";
+  const activeRepoName = activeSession
+    ? basename(activeSession.repoPath)
+    : repo.rootPath
+      ? basename(repo.rootPath)
+      : "";
+  const activeGraphitePrUrls = activeSession
+    ? [
+        ...new Set([
+          ...(activeSession.graphitePrUrls ?? []),
+          ...(activeSession.graphitePrUrl ? [activeSession.graphitePrUrl] : []),
+        ]),
+      ]
+    : [];
+  const activeAgentTerminalId = activeSession
+    ? agentTerminalId(activeSession.id, profile)
+    : "";
+  const activeShellTerminalId = activeSession
+    ? shellTerminalId(activeSession.id)
+    : "";
+  const terminalHistory = useMemo(
+    () =>
+      commandBlocks
+        .filter((block) => block.terminalId === activeShellTerminalId)
+        .slice(0, 8),
+    [activeShellTerminalId, commandBlocks],
+  );
+  const lastCommandBlock = terminalHistory[0];
+  const workspaceGridStyle: CSSProperties = {
+    gridTemplateColumns: `minmax(320px, ${splitPercent}%) 8px minmax(280px, 1fr)`,
+  };
+
+  useEffect(() => {
+    shortcutsRef.current = shortcuts;
+    localStorage.setItem(shortcutStorageKey, JSON.stringify(shortcuts));
+  }, [shortcuts]);
+
+  useEffect(() => {
+    localStorage.setItem(splitStorageKey, String(splitPercent));
+  }, [splitPercent]);
+
+  useEffect(() => {
+    focusedPanelRef.current = focusedPanel;
+  }, [focusedPanel]);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    activeAgentTerminalIdRef.current = activeAgentTerminalId;
+  }, [activeAgentTerminalId]);
+
+  useEffect(() => {
+    if (
+      !activeSession ||
+      activeSession.archived ||
+      graphiteDetectionRef.current.has(activeSession.id)
+    ) {
+      return;
+    }
+
+    graphiteDetectionRef.current.add(activeSession.id);
+    refreshGraphitePrs();
+  }, [activeSession?.id, activeSession?.archived]);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (!topbarActionsRef.current?.contains(target)) {
+        setShowShortcuts(false);
+        setCapturingShortcut(null);
+        setShowPrMenu(false);
+      }
+
+      if (!terminalPanelRef.current?.contains(target)) {
+        setShowCommandHistory(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, []);
+
+  useEffect(() => {
+    window.agentEditor.loadState().then(async (state) => {
+      setSessions(state.sessions);
+      setRecentRepoPaths(state.recentRepoPaths ?? []);
+      setActiveSessionId(state.sessions[0]?.id ?? "");
+      graphiteUrlsRef.current = new Map(
+        state.sessions
+          .filter(
+            (session) =>
+              session.graphitePrUrl || session.graphitePrUrls?.length,
+          )
+          .map((session) => [
+            session.id,
+            [
+              ...(session.graphitePrUrls ?? []),
+              ...(session.graphitePrUrl ? [session.graphitePrUrl] : []),
+            ],
+          ]),
+      );
+
+      if (state.lastRepoPath) {
+        try {
+          setRepo(await window.agentEditor.inspectRepo(state.lastRepoPath));
+        } catch {
+          setRepo({ ...emptySnapshot, repoPath: state.lastRepoPath });
+        }
+      }
+    });
+
+    return window.agentEditor.onTerminalEvent(handleTerminalEvent);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (capturingShortcut) {
+        const shortcut = shortcutFromEvent(event);
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (shortcut) {
+          setShortcuts((current) => ({
+            ...current,
+            [capturingShortcut]: shortcut,
+          }));
+          setCapturingShortcut(null);
+        }
+        return;
+      }
+
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      const target = shortcutTargetForEvent(event, shortcutsRef.current);
+      if (!target) {
+        return;
+      }
+
+      event.preventDefault();
+      focusPanel(target);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [capturingShortcut]);
+
+  useEffect(() => {
+    if (!activeSession || !agentContainerRef.current) {
+      detachMounted(mountedAgentRef.current);
+      mountedAgentRef.current = null;
+      return;
+    }
+
+    mountedAgentRef.current = mountTerminal({
+      container: agentContainerRef.current,
+      current: mountedAgentRef.current,
+      terminalId: activeAgentTerminalId,
+      cwd: activeSession.worktreePath,
+      command: currentProfile.command,
+    });
+
+    return () => {
+      detachMounted(mountedAgentRef.current);
+      mountedAgentRef.current = null;
+    };
+  }, [activeAgentTerminalId, activeSession, currentProfile.command]);
+
+  useEffect(() => {
+    if (
+      rightPaneMode !== "terminal" ||
+      !activeSession ||
+      !shellContainerRef.current
+    ) {
+      detachMounted(mountedShellRef.current);
+      mountedShellRef.current = null;
+      return;
+    }
+
+    mountedShellRef.current = mountTerminal({
+      container: shellContainerRef.current,
+      current: mountedShellRef.current,
+      terminalId: activeShellTerminalId,
+      cwd: activeSession.repoPath,
+    });
+
+    return () => {
+      detachMounted(mountedShellRef.current);
+      mountedShellRef.current = null;
+    };
+  }, [activeShellTerminalId, activeSession, rightPaneMode]);
+
+  function handleTerminalEvent(event: TerminalEvent) {
+    const terminal = terminalsRef.current.get(event.terminalId);
+    if (!terminal) {
+      return;
+    }
+
+    if (event.type === "exit") {
+      terminal.write(`\r\n[exited ${event.code ?? event.signal ?? 0}]\r\n`);
+      markAgentFinished(event.terminalId);
+      return;
+    }
+
+    if (event.type === "error") {
+      terminal.write(`\r\n${event.message ?? "Terminal error"}\r\n`);
+      return;
+    }
+
+    const data = event.data ?? "";
+    terminal.write(data);
+    recordShellOutput(event.terminalId, data);
+    captureGraphiteUrl(event.terminalId, data);
+  }
+
+  function markAgentFinished(terminalId: string) {
+    if (!terminalId.startsWith("agent:")) {
+      return;
+    }
+
+    const isVisibleAgent =
+      terminalId === activeAgentTerminalIdRef.current &&
+      focusedPanelRef.current === "agent";
+    if (isVisibleAgent) {
+      return;
+    }
+
+    setFinishedAgentIds((current) => new Set(current).add(terminalId));
+  }
+
+  function mountTerminal({
+    container,
+    current,
+    terminalId,
+    cwd,
+    command,
+  }: {
+    container: HTMLDivElement;
+    current: MountedTerminal | null;
+    terminalId: string;
+    cwd: string;
+    command?: string;
+  }) {
+    if (current?.id === terminalId) {
+      return current;
+    }
+
+    detachMounted(current);
+    container.replaceChildren();
+
+    const cached = getOrCreateTerminal(terminalId, cwd, command);
+    if (cached.terminal.element) {
+      container.appendChild(cached.terminal.element);
+    } else {
+      cached.terminal.open(container);
+    }
+    cached.fit.fit();
+    cached.terminal.focus();
+
+    const resizeObserver = new ResizeObserver(() => {
+      cached.fit.fit();
+      window.agentEditor
+        .resizeTerminal(terminalId, cached.terminal.cols, cached.terminal.rows)
+        .catch(() => undefined);
+    });
+    resizeObserver.observe(container);
+
+    window.agentEditor
+      .resizeTerminal(terminalId, cached.terminal.cols, cached.terminal.rows)
+      .catch(() => undefined);
+
+    return {
+      id: terminalId,
+      resizeObserver,
+    };
+  }
+
+  function getOrCreateTerminal(
+    terminalId: string,
+    cwd: string,
+    command?: string,
+  ) {
+    const cached = terminalCacheRef.current.get(terminalId);
+    if (cached) {
+      return cached;
+    }
+
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: false,
+      fontFamily: '"SF Mono", Menlo, ui-monospace, monospace',
+      fontSize: 12,
+      scrollback: 100_000,
+      theme: {
+        background: "#171717",
+        foreground: "#e7e7e7",
+        cursor: "#ffffff",
+        selectionBackground: "#404040",
+      },
+    });
+    const fit = new FitAddon();
+    terminal.loadAddon(fit);
+    terminal.attachCustomKeyEventHandler((event) =>
+      handleTerminalKeyEvent(event, terminalId, terminal),
+    );
+    terminal.onData((data) => {
+      if (terminalId.startsWith("shell:")) {
+        recordShellInput(terminalId, data);
+      }
+      window.agentEditor
+        .sendTerminalInput(terminalId, data)
+        .catch(() => undefined);
+    });
+    terminalsRef.current.set(terminalId, terminal);
+
+    window.agentEditor
+      .startTerminal(terminalId, cwd, command)
+      .catch((nextError) => {
+        terminal.write(
+          `\r\n${nextError instanceof Error ? nextError.message : String(nextError)}\r\n`,
+        );
+      });
+
+    const nextCached = { terminal, fit };
+    terminalCacheRef.current.set(terminalId, nextCached);
+    return nextCached;
+  }
+
+  function handleTerminalKeyEvent(
+    event: KeyboardEvent,
+    terminalId: string,
+    terminal: Terminal,
+  ) {
+    if (event.type !== "keydown") {
+      return true;
+    }
+
+    if (event.metaKey && normalizeKey(event.key) === "C") {
+      const selection = terminal.getSelection();
+      if (selection) {
+        navigator.clipboard
+          .writeText(normalizeTerminalText(selection))
+          .catch(() => undefined);
+        return false;
+      }
+    }
+
+    const target = shortcutTargetForEvent(event, shortcutsRef.current);
+    if (target) {
+      focusPanel(target);
+      return false;
+    }
+
+    return true;
+  }
+
+  function detachMounted(mounted: MountedTerminal | null) {
+    if (!mounted) {
+      return;
+    }
+
+    mounted.resizeObserver.disconnect();
+  }
+
+  async function createSessionForRepo(repoPath: string) {
+    const name = sessionName.trim() || `Session ${sessions.length + 1}`;
+    setError("");
+
+    try {
+      const session = await window.agentEditor.createSession({
+        repoPath,
+        name,
+        target: "local",
+      });
+      setSessions((current) => [session, ...current]);
+      setActiveSessionId(session.id);
+      setRepo(await window.agentEditor.inspectRepo(session.worktreePath));
+      rememberRecentRepo(session.repoPath);
+      setSessionName("");
+      setShowNewSession(false);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  async function chooseRepoForNewSession() {
+    setError("");
+
+    try {
+      const nextRepo = await window.agentEditor.chooseRepo();
+      if (!nextRepo) {
+        return;
+      }
+
+      setRepo(nextRepo);
+      rememberRecentRepo(nextRepo.rootPath);
+      await createSessionForRepo(nextRepo.rootPath);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  async function selectSession(session: SessionRecord) {
+    setActiveSessionId(session.id);
+    clearFinishedAgents(session.id);
+    window.agentEditor
+      .inspectRepo(session.worktreePath)
+      .then(setRepo)
+      .catch(() => undefined);
+  }
+
+  async function renameSession(sessionId: string) {
+    const name = editingSessionName.trim();
+    if (!name) {
+      return;
+    }
+
+    try {
+      const updatedSession = await window.agentEditor.updateSession({
+        id: sessionId,
+        name,
+      });
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === sessionId ? updatedSession : session,
+        ),
+      );
+      setEditingSessionId("");
+      setEditingSessionName("");
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  async function forkSession(session: SessionRecord) {
+    const name = forkSessionName.trim() || `${session.name} fork`;
+    setError("");
+
+    try {
+      const forkedSession = await window.agentEditor.forkSession({
+        sourceSessionId: session.id,
+        name,
+      });
+      setSessions((current) => [forkedSession, ...current]);
+      setActiveSessionId(forkedSession.id);
+      setRepo(await window.agentEditor.inspectRepo(forkedSession.worktreePath));
+      setForkingSessionId("");
+      setForkSessionName("");
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  async function togglePinned(session: SessionRecord) {
+    try {
+      const updatedSession = await window.agentEditor.updateSession({
+        id: session.id,
+        pinned: !session.pinned,
+      });
+      setSessions((current) =>
+        current.map((item) => (item.id === session.id ? updatedSession : item)),
+      );
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  async function deleteSession(sessionId: string) {
+    try {
+      const nextSessions = await window.agentEditor.deleteSession(sessionId);
+      setSessions(nextSessions);
+      setConfirmingDeleteId("");
+      setEditingSessionId("");
+      setForkingSessionId("");
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(nextSessions[0]?.id ?? "");
+      }
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  async function syncLinear(session: SessionRecord) {
+    setError("");
+
+    try {
+      const issue = await window.agentEditor.syncLinear(session.id);
+      setSessions((current) =>
+        current.map((item) =>
+          item.id === session.id ? { ...item, linearIssue: issue } : item,
+        ),
+      );
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  async function closeSession(session: SessionRecord) {
+    setError("");
+
+    try {
+      const nextSessions = await window.agentEditor.closeSession({
+        id: session.id,
+        completeLinear: closeOptions.linear,
+        cleanupGit: closeOptions.git,
+        archive: closeOptions.archive,
+      });
+      setSessions(nextSessions);
+      setClosingSessionId("");
+      const nextActive = nextSessions.find((item) => !item.archived);
+      if (activeSessionId === session.id) {
+        setActiveSessionId(nextActive?.id ?? "");
+      }
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  async function reviveSession(session: SessionRecord) {
+    setError("");
+
+    try {
+      const revivedSession = await window.agentEditor.reviveSession(session.id);
+      setSessions((current) =>
+        current.map((item) => (item.id === session.id ? revivedSession : item)),
+      );
+      setActiveSessionId(revivedSession.id);
+      setRepo(
+        await window.agentEditor.inspectRepo(revivedSession.worktreePath),
+      );
+      setShowArchived(false);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  function updateSessionNotes(sessionId: string, notes: string) {
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === sessionId ? { ...session, notes } : session,
+      ),
+    );
+
+    const existingTimer = notesSaveTimersRef.current.get(sessionId);
+    if (existingTimer) {
+      window.clearTimeout(existingTimer);
+    }
+
+    const timer = window.setTimeout(() => {
+      notesSaveTimersRef.current.delete(sessionId);
+      window.agentEditor
+        .updateSession({ id: sessionId, notes })
+        .catch((nextError) => {
+          setError(
+            nextError instanceof Error ? nextError.message : String(nextError),
+          );
+        });
+    }, 350);
+    notesSaveTimersRef.current.set(sessionId, timer);
+  }
+
+  function rememberRecentRepo(repoPath: string) {
+    setRecentRepoPaths((current) => [
+      repoPath,
+      ...current.filter((path) => path !== repoPath),
+    ]);
+  }
+
+  function recordShellInput(terminalId: string, data: string) {
+    const state = shellCaptureRef.current.get(terminalId) ?? { input: "" };
+
+    for (const char of data) {
+      if (char === "\r") {
+        const command = state.input.trimEnd();
+        state.input = "";
+
+        if (command.trim()) {
+          const block: CommandBlock = {
+            id: `${terminalId}:${Date.now()}`,
+            terminalId,
+            command,
+            output: "",
+            startedAt: Date.now(),
+          };
+          state.current = block;
+          setCommandBlocks((current) => [block, ...current].slice(0, 80));
+        }
+      } else if (char === "\u007f") {
+        state.input = state.input.slice(0, -1);
+      } else if (char === "\u0003") {
+        state.input = "";
+      } else if (char === "\n" || char === "\u001b") {
+        continue;
+      } else if (char >= " " || char === "\t") {
+        state.input += char;
+      }
+    }
+
+    shellCaptureRef.current.set(terminalId, state);
+  }
+
+  function recordShellOutput(terminalId: string, data: string) {
+    if (!terminalId.startsWith("shell:") || !data) {
+      return;
+    }
+
+    const state = shellCaptureRef.current.get(terminalId);
+    const block = state?.current;
+    if (!block) {
+      return;
+    }
+
+    block.output = `${block.output}${data}`.slice(-240_000);
+    block.endedAt = Date.now();
+    setCommandBlocks((current) =>
+      current.map((item) => (item.id === block.id ? { ...block } : item)),
+    );
+  }
+
+  function captureGraphiteUrl(terminalId: string, data: string) {
+    const sessionId = sessionIdFromTerminalId(terminalId);
+    if (!sessionId || !data.includes("graphite.dev")) {
+      return;
+    }
+
+    const match = data.match(graphiteUrlPattern)?.at(-1);
+    if (!match) {
+      return;
+    }
+
+    const url = match.replace(/[.,;:]+$/, "");
+    const urls = graphiteUrlsRef.current.get(sessionId) ?? [];
+    if (urls.includes(url)) {
+      return;
+    }
+
+    const nextUrls = [url, ...urls];
+    graphiteUrlsRef.current.set(sessionId, nextUrls);
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === sessionId
+          ? { ...session, graphitePrUrl: nextUrls[0], graphitePrUrls: nextUrls }
+          : session,
+      ),
+    );
+    window.agentEditor
+      .updateSession({
+        id: sessionId,
+        graphitePrUrl: nextUrls[0],
+        graphitePrUrls: nextUrls,
+      })
+      .catch(() => undefined);
+  }
+
+  async function copyShellSelection() {
+    const terminal = terminalsRef.current.get(activeShellTerminalId);
+    const selection = terminal?.getSelection();
+    if (!selection) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(normalizeTerminalText(selection));
+  }
+
+  function sendBlockToAgent(block: CommandBlock | undefined) {
+    if (!block || !activeAgentTerminalId) {
+      return;
+    }
+
+    const text = commandBlockText(block);
+    window.agentEditor
+      .sendTerminalInput(activeAgentTerminalId, text)
+      .then(() => focusPanel("agent"))
+      .catch(() => undefined);
+  }
+
+  async function openTerminalLog() {
+    if (!activeShellTerminalId) {
+      return;
+    }
+
+    const result = await window.agentEditor.openTerminalLog(
+      activeShellTerminalId,
+    );
+    if (result) {
+      setError(result);
+    }
+  }
+
+  async function refreshGraphitePrs() {
+    if (!activeSession) {
+      return [];
+    }
+
+    setError("");
+    try {
+      const urls = await window.agentEditor.refreshGraphitePrs(
+        activeSession.id,
+      );
+      graphiteUrlsRef.current.set(activeSession.id, urls);
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === activeSession.id
+            ? {
+                ...session,
+                graphitePrUrl: urls[0],
+                graphitePrUrls: urls,
+                updatedAt: Date.now(),
+              }
+            : session,
+        ),
+      );
+      setShowPrMenu(urls.length > 1);
+      return urls;
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+      return [];
+    }
+  }
+
+  async function openOrRefreshGraphite() {
+    const refreshedUrls = await refreshGraphitePrs();
+    const urls = refreshedUrls.length ? refreshedUrls : activeGraphitePrUrls;
+
+    if (urls.length === 1) {
+      window.agentEditor.openExternal(urls[0]).catch(() => undefined);
+    } else if (urls.length > 1) {
+      setShowPrMenu(true);
+      setShowShortcuts(false);
+    }
+  }
+
+  function openLinearUrl() {
+    if (!activeSession?.linearIssue?.url) {
+      return;
+    }
+
+    window.agentEditor
+      .openExternal(activeSession.linearIssue.url)
+      .catch(() => undefined);
+  }
+
+  function clearFinishedAgents(sessionId: string) {
+    setFinishedAgentIds((current) => {
+      const next = new Set(current);
+      for (const terminalId of next) {
+        if (terminalId.startsWith(`agent:${sessionId}:`)) {
+          next.delete(terminalId);
+        }
+      }
+      return next;
+    });
+  }
+
+  function beginPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const grid = workspaceGridRef.current;
+    if (!grid) {
+      return;
+    }
+
+    event.preventDefault();
+    const rect = grid.getBoundingClientRect();
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const nextPercent =
+        ((moveEvent.clientX - rect.left) / Math.max(rect.width, 1)) * 100;
+      setSplitPercent(Math.min(78, Math.max(42, nextPercent)));
+    };
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  }
+
+  function focusPanel(target: ShortcutTarget) {
+    setFocusedPanel(target);
+    if (target === "sidebar") {
+      const element = sidebarRef.current?.querySelector<
+        HTMLButtonElement | HTMLInputElement
+      >("button, input");
+      element?.focus();
+      return;
+    }
+
+    const mounted =
+      target === "agent" ? mountedAgentRef.current : mountedShellRef.current;
+    if (!mounted) {
+      return;
+    }
+
+    terminalsRef.current.get(mounted.id)?.focus();
+    if (target === "agent" && activeSessionIdRef.current) {
+      clearFinishedAgents(activeSessionIdRef.current);
+    }
+  }
+
+  function updateShortcut(target: ShortcutTarget) {
+    setCapturingShortcut(target);
+  }
+
+  return (
+    <main className="app-shell">
+      <aside
+        className="sidebar"
+        ref={sidebarRef}
+        onPointerDown={() => setFocusedPanel("sidebar")}
+      >
+        <div className="drag-zone" />
+
+        <div className="sidebar-top">
+          <h1>Agent Editor</h1>
+        </div>
+
+        <div className="sidebar-actions">
+          <button
+            className="new-button"
+            onClick={() => setShowNewSession(true)}
+          >
+            <Plus size={15} />
+            New
+          </button>
+          <button
+            className={
+              showArchived ? "archive-toggle active" : "archive-toggle"
+            }
+            onClick={() => setShowArchived((current) => !current)}
+          >
+            <Archive size={14} />
+            Archived
+          </button>
+        </div>
+
+        {showNewSession ? (
+          <section className="new-session-sheet">
+            <div className="sheet-head">
+              <h2>New Session</h2>
+              <button onClick={() => setShowNewSession(false)}>
+                <X size={14} />
+              </button>
+            </div>
+            <input
+              value={sessionName}
+              onChange={(event) => setSessionName(event.target.value)}
+              placeholder="Name"
+            />
+            <div className="repo-list">
+              {recentRepoPaths.map((repoPath) => (
+                <button
+                  key={repoPath}
+                  onClick={() => createSessionForRepo(repoPath)}
+                >
+                  <span>{basename(repoPath)}</span>
+                  <small>{repoPath}</small>
+                </button>
+              ))}
+              <button onClick={chooseRepoForNewSession}>
+                <span>Choose repo</span>
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        <nav className="session-list">
+          {visibleSessions.map((session) => (
+            <div
+              className={sessionItemClassName(
+                session,
+                activeSessionId,
+                finishedAgentIds,
+              )}
+              key={session.id}
+            >
+              {editingSessionId === session.id ? (
+                <div className="session-edit">
+                  <input
+                    value={editingSessionName}
+                    onChange={(event) =>
+                      setEditingSessionName(event.target.value)
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        renameSession(session.id);
+                      }
+                      if (event.key === "Escape") {
+                        setEditingSessionId("");
+                        setEditingSessionName("");
+                      }
+                    }}
+                  />
+                  <button onClick={() => renameSession(session.id)}>
+                    <Check size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingSessionId("");
+                      setEditingSessionName("");
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : forkingSessionId === session.id ? (
+                <div className="session-edit">
+                  <input
+                    value={forkSessionName}
+                    onChange={(event) => setForkSessionName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        forkSession(session);
+                      }
+                      if (event.key === "Escape") {
+                        setForkingSessionId("");
+                        setForkSessionName("");
+                      }
+                    }}
+                  />
+                  <button onClick={() => forkSession(session)}>
+                    <Check size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setForkingSessionId("");
+                      setForkSessionName("");
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : closingSessionId === session.id ? (
+                <div className="close-confirm">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={closeOptions.linear}
+                      onChange={(event) =>
+                        setCloseOptions((current) => ({
+                          ...current,
+                          linear: event.target.checked,
+                        }))
+                      }
+                      disabled={!session.linearIssue}
+                    />
+                    Linear
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={closeOptions.git}
+                      onChange={(event) =>
+                        setCloseOptions((current) => ({
+                          ...current,
+                          git: event.target.checked,
+                        }))
+                      }
+                    />
+                    Git
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={closeOptions.archive}
+                      onChange={(event) =>
+                        setCloseOptions((current) => ({
+                          ...current,
+                          archive: event.target.checked,
+                        }))
+                      }
+                    />
+                    Archive
+                  </label>
+                  <button onClick={() => closeSession(session)}>
+                    <Check size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setClosingSessionId("");
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <button
+                    className="session-main"
+                    onClick={() => selectSession(session)}
+                  >
+                    <span>{session.name}</span>
+                    <small>{session.branch}</small>
+                  </button>
+                  <div className="session-actions">
+                    {session.archived ? (
+                      <button onClick={() => reviveSession(session)}>
+                        <RotateCcw size={13} />
+                      </button>
+                    ) : (
+                      <>
+                        <button onClick={() => togglePinned(session)}>
+                          {session.pinned ? (
+                            <PinOff size={13} />
+                          ) : (
+                            <Pin size={13} />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setForkingSessionId(session.id);
+                            setForkSessionName(`${session.name} fork`);
+                            setEditingSessionId("");
+                            setConfirmingDeleteId("");
+                            setClosingSessionId("");
+                          }}
+                        >
+                          <GitFork size={13} />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditingSessionId(session.id);
+                            setEditingSessionName(session.name);
+                            setForkingSessionId("");
+                            setConfirmingDeleteId("");
+                            setClosingSessionId("");
+                          }}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setClosingSessionId(session.id);
+                            setCloseOptions({
+                              linear: Boolean(session.linearIssue),
+                              git: true,
+                              archive: true,
+                            });
+                            setEditingSessionId("");
+                            setForkingSessionId("");
+                            setConfirmingDeleteId("");
+                          }}
+                        >
+                          <Archive size={13} />
+                        </button>
+                        {confirmingDeleteId === session.id ? (
+                          <>
+                            <button onClick={() => deleteSession(session.id)}>
+                              <Check size={13} />
+                            </button>
+                            <button onClick={() => setConfirmingDeleteId("")}>
+                              <X size={13} />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setConfirmingDeleteId(session.id);
+                              setEditingSessionId("");
+                              setForkingSessionId("");
+                              setClosingSessionId("");
+                            }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      <section className="workspace">
+        <header className="topbar">
+          <div className="workspace-title">
+            <strong>{activeSession?.name || "New session"}</strong>
+            <span>
+              {[activeRepoName, activeContext].filter(Boolean).join(" · ") ||
+                "No session"}
+            </span>
+          </div>
+          <div className="topbar-actions" ref={topbarActionsRef}>
+            {activeSession?.linearIssue ? (
+              <button className="pr-link" onClick={openLinearUrl}>
+                {activeSession.linearIssue.identifier}
+                <ExternalLink size={13} />
+              </button>
+            ) : null}
+            {activeSession && !activeSession.archived ? (
+              <button
+                className="pr-link"
+                onClick={() => syncLinear(activeSession)}
+              >
+                <Link2 size={13} />
+                Linear
+              </button>
+            ) : null}
+            {activeSession && !activeSession.archived ? (
+              <button className="pr-link" onClick={openOrRefreshGraphite}>
+                <GitPullRequest size={13} />
+                Graphite
+              </button>
+            ) : null}
+            {showPrMenu ? (
+              <div className="pr-menu">
+                {activeGraphitePrUrls.map((url, index) => (
+                  <button
+                    className="pr-row"
+                    key={url}
+                    onClick={() => {
+                      window.agentEditor
+                        .openExternal(url)
+                        .catch(() => undefined);
+                      setShowPrMenu(false);
+                    }}
+                  >
+                    <span>{`PR ${index + 1}`}</span>
+                    <small>{url}</small>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <button
+              className="icon-button"
+              onClick={() => setShowShortcuts((current) => !current)}
+            >
+              <Keyboard size={16} />
+            </button>
+            {showShortcuts ? (
+              <div className="shortcut-menu">
+                {(["sidebar", "agent", "terminal"] as const).map((target) => (
+                  <button
+                    className="shortcut-row"
+                    key={target}
+                    onClick={() => updateShortcut(target)}
+                  >
+                    <span>{shortcutLabel(target)}</span>
+                    <strong>
+                      {capturingShortcut === target
+                        ? "Press keys"
+                        : displayShortcut(shortcuts[target])}
+                    </strong>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </header>
+
+        {error ? <div className="error-line">{error}</div> : null}
+
+        <div
+          className="workspace-grid"
+          ref={workspaceGridRef}
+          style={workspaceGridStyle}
+        >
+          <section
+            className="agent-panel"
+            onPointerDown={() => {
+              setFocusedPanel("agent");
+              if (activeSession) {
+                clearFinishedAgents(activeSession.id);
+              }
+            }}
+          >
+            <div className="agent-head">
+              <div className="segmented">
+                {profiles.map((item) => (
+                  <button
+                    className={item.id === profile ? "selected" : ""}
+                    key={item.id}
+                    onClick={() => {
+                      setProfile(item.id);
+                      if (activeSession) {
+                        clearFinishedAgents(activeSession.id);
+                      }
+                    }}
+                  >
+                    {item.name}
+                  </button>
+                ))}
+              </div>
+              <span>{currentProfile.command}</span>
+            </div>
+            <div className="xterm-host" ref={agentContainerRef} />
+          </section>
+
+          <div className="panel-divider" onPointerDown={beginPanelResize} />
+
+          <aside
+            className="terminal-panel"
+            ref={terminalPanelRef}
+            onPointerDown={() => setFocusedPanel("terminal")}
+          >
+            <div className="terminal-head">
+              <div className="right-pane-tabs">
+                <button
+                  className={rightPaneMode === "terminal" ? "selected" : ""}
+                  onClick={() => setRightPaneMode("terminal")}
+                >
+                  Terminal
+                </button>
+                <button
+                  className={rightPaneMode === "notes" ? "selected" : ""}
+                  onClick={() => {
+                    setRightPaneMode("notes");
+                    setShowCommandHistory(false);
+                  }}
+                >
+                  Notes
+                </button>
+              </div>
+              <div className="terminal-tools">
+                <button
+                  onClick={copyShellSelection}
+                  disabled={!activeSession || rightPaneMode !== "terminal"}
+                  title="Copy selection"
+                >
+                  <Copy size={13} />
+                </button>
+                <button
+                  onClick={() => sendBlockToAgent(lastCommandBlock)}
+                  disabled={
+                    !lastCommandBlock ||
+                    !activeSession ||
+                    rightPaneMode !== "terminal"
+                  }
+                  title="Send last command"
+                >
+                  <Send size={13} />
+                </button>
+                <button
+                  onClick={() => setShowCommandHistory((current) => !current)}
+                  disabled={
+                    terminalHistory.length === 0 || rightPaneMode !== "terminal"
+                  }
+                  title="Command history"
+                >
+                  <History size={13} />
+                </button>
+                <button
+                  onClick={openTerminalLog}
+                  disabled={!activeSession || rightPaneMode !== "terminal"}
+                  title="Open terminal log"
+                >
+                  <FileText size={13} />
+                </button>
+              </div>
+            </div>
+            {showCommandHistory ? (
+              <div className="history-menu">
+                {terminalHistory.map((block) => (
+                  <button
+                    className="history-row"
+                    key={block.id}
+                    onClick={() => {
+                      sendBlockToAgent(block);
+                      setShowCommandHistory(false);
+                    }}
+                  >
+                    <span>{block.command}</span>
+                    <small>{commandBlockPreview(block)}</small>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {rightPaneMode === "terminal" ? (
+              <div className="xterm-host" ref={shellContainerRef} />
+            ) : (
+              <textarea
+                className="notes-editor"
+                value={activeSession?.notes ?? ""}
+                onChange={(event) => {
+                  if (activeSession) {
+                    updateSessionNotes(activeSession.id, event.target.value);
+                  }
+                }}
+                disabled={!activeSession}
+              />
+            )}
+          </aside>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function agentTerminalId(sessionId: string, profile: AgentProfileId) {
+  return `agent:${sessionId}:${profile}`;
+}
+
+function shellTerminalId(sessionId: string) {
+  return `shell:${sessionId}`;
+}
+
+function sessionIdFromTerminalId(terminalId: string) {
+  if (terminalId.startsWith("shell:")) {
+    return terminalId.slice("shell:".length);
+  }
+
+  if (terminalId.startsWith("agent:")) {
+    return terminalId.split(":")[1] ?? "";
+  }
+
+  return "";
+}
+
+function basename(repoPath: string) {
+  return repoPath.split(/[\\/]/).filter(Boolean).at(-1) ?? repoPath;
+}
+
+function commandBlockText(block: CommandBlock) {
+  const output = stripTerminalControl(block.output).trim();
+  return output ? `$ ${block.command}\n${output}` : `$ ${block.command}`;
+}
+
+function commandBlockPreview(block: CommandBlock) {
+  return (
+    stripTerminalControl(block.output)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 180) || block.command
+  );
+}
+
+function sessionItemClassName(
+  session: SessionRecord,
+  activeSessionId: string,
+  finishedAgentIds: Set<string>,
+) {
+  const classNames = ["session-item"];
+  if (session.id === activeSessionId) {
+    classNames.push("active");
+  }
+  if (
+    [...finishedAgentIds].some((terminalId) =>
+      terminalId.startsWith(`agent:${session.id}:`),
+    )
+  ) {
+    classNames.push("agent-finished");
+  }
+
+  return classNames.join(" ");
+}
+
+function normalizeTerminalText(value: string) {
+  return stripTerminalControl(value)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
+function stripTerminalControl(value: string) {
+  return value
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function loadShortcuts(): Shortcuts {
+  try {
+    return {
+      ...defaultShortcuts,
+      ...JSON.parse(localStorage.getItem(shortcutStorageKey) ?? "{}"),
+    };
+  } catch {
+    return defaultShortcuts;
+  }
+}
+
+function loadSplitPercent() {
+  const stored = Number(localStorage.getItem(splitStorageKey));
+  return Number.isFinite(stored) ? Math.min(78, Math.max(42, stored)) : 62;
+}
+
+function shortcutFromEvent(event: KeyboardEvent) {
+  const key = normalizeKey(event.key);
+  if (!key || ["META", "CONTROL", "ALT", "SHIFT"].includes(key)) {
+    return "";
+  }
+
+  const parts = [];
+  if (event.metaKey) {
+    parts.push("Meta");
+  }
+  if (event.ctrlKey) {
+    parts.push("Control");
+  }
+  if (event.altKey) {
+    parts.push("Alt");
+  }
+  if (event.shiftKey) {
+    parts.push("Shift");
+  }
+  parts.push(key);
+  return parts.join("+");
+}
+
+function shortcutTargetForEvent(event: KeyboardEvent, shortcuts: Shortcuts) {
+  const shortcut = shortcutFromEvent(event);
+  return (Object.keys(shortcuts) as ShortcutTarget[]).find(
+    (target) => shortcuts[target] === shortcut,
+  );
+}
+
+function normalizeKey(key: string) {
+  if (key.length === 1) {
+    return key.toUpperCase();
+  }
+
+  return key;
+}
+
+function displayShortcut(shortcut: string) {
+  return shortcut
+    .replace("Meta", "Cmd")
+    .replace("Control", "Ctrl")
+    .replace("Alt", "Opt");
+}
+
+function shortcutLabel(target: ShortcutTarget) {
+  if (target === "sidebar") {
+    return "Sessions";
+  }
+  if (target === "agent") {
+    return "Agent";
+  }
+  return "Terminal";
+}
+
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target.isContentEditable
+  );
+}
