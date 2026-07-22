@@ -14,10 +14,10 @@
   },
   "scripts": {
     "postinstall": "node scripts/install-electron.mjs",
-    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.node.json --watch\" \"wait-on tcp:5173 dist/main/index.js dist/preload/index.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 node scripts/run-electron.mjs dist/main/index.js\"",
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.node.json --watch\" \"wait-on tcp:5173 dist/main/index.js dist/preload/index.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist/main/index.js\"",
     "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.node.json && vite build",
     "package:mac": "pnpm build && electron-builder --mac dir",
-    "start": "node scripts/run-electron.mjs dist/main/index.js",
+    "start": "electron dist/main/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.renderer.json",
     "format": "prettier --write ."
   },

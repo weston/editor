@@ -28,6 +28,7 @@ import type {
   AgentProfile,
   AgentProfileId,
   RepoSnapshot,
+  RuntimeTarget,
   SessionRecord,
   TerminalEvent,
 } from "../shared";
@@ -60,6 +61,7 @@ const graphiteUrlPattern = /https:\/\/(?:app\.)?graphite\.dev\/[^\s"'<>)]*/g;
 type MountedTerminal = {
   id: string;
   resizeObserver: ResizeObserver;
+  animationFrames: number[];
 };
 
 type CachedTerminal = {
@@ -89,6 +91,11 @@ export default function App() {
   const [profile, setProfile] = useState<AgentProfileId>("claude");
   const [showNewSession, setShowNewSession] = useState(false);
   const [sessionName, setSessionName] = useState("");
+  const [newSessionTarget, setNewSessionTarget] =
+    useState<RuntimeTarget>("local");
+  const [newSailboxId, setNewSailboxId] = useState("");
+  const [newSailboxApp, setNewSailboxApp] = useState("");
+  const [newSailboxName, setNewSailboxName] = useState("");
   const [editingSessionId, setEditingSessionId] = useState("");
   const [editingSessionName, setEditingSessionName] = useState("");
   const [forkingSessionId, setForkingSessionId] = useState("");
@@ -162,6 +169,9 @@ export default function App() {
   const agentCommand = activeSession
     ? commandForAgent(activeSession, currentProfile)
     : currentProfile.command;
+  const shellCommand = activeSession
+    ? commandForShell(activeSession)
+    : undefined;
   const activeContext = activeSession?.id || repo.rootPath || "";
   const activeRepoName = activeSession
     ? basename(activeSession.repoPath)
@@ -347,13 +357,19 @@ export default function App() {
       current: mountedShellRef.current,
       terminalId: activeShellTerminalId,
       cwd: activeSession.repoPath,
+      command: shellCommand,
     });
 
     return () => {
       detachMounted(mountedShellRef.current);
       mountedShellRef.current = null;
     };
-  }, [activeShellTerminalId, activeSession?.repoPath, rightPaneMode]);
+  }, [
+    activeShellTerminalId,
+    activeSession?.repoPath,
+    rightPaneMode,
+    shellCommand,
+  ]);
 
   function handleTerminalEvent(event: TerminalEvent) {
     const terminal = terminalsRef.current.get(event.terminalId);
@@ -419,25 +435,33 @@ export default function App() {
     } else {
       cached.terminal.open(container);
     }
-    cached.fit.fit();
+    fitAndResizeTerminal(terminalId, cached);
     cached.terminal.focus();
 
     const resizeObserver = new ResizeObserver(() => {
-      cached.fit.fit();
-      window.agentEditor
-        .resizeTerminal(terminalId, cached.terminal.cols, cached.terminal.rows)
-        .catch(() => undefined);
+      fitAndResizeTerminal(terminalId, cached);
     });
     resizeObserver.observe(container);
 
-    window.agentEditor
-      .resizeTerminal(terminalId, cached.terminal.cols, cached.terminal.rows)
-      .catch(() => undefined);
+    const animationFrames = [
+      requestAnimationFrame(() => fitAndResizeTerminal(terminalId, cached)),
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => fitAndResizeTerminal(terminalId, cached));
+      }),
+    ];
 
     return {
       id: terminalId,
       resizeObserver,
+      animationFrames,
     };
+  }
+
+  function fitAndResizeTerminal(terminalId: string, cached: CachedTerminal) {
+    cached.fit.fit();
+    window.agentEditor
+      .resizeTerminal(terminalId, cached.terminal.cols, cached.terminal.rows)
+      .catch(() => undefined);
   }
 
   function getOrCreateTerminal(
@@ -522,6 +546,7 @@ export default function App() {
     }
 
     mounted.resizeObserver.disconnect();
+    mounted.animationFrames.forEach((frame) => cancelAnimationFrame(frame));
   }
 
   async function createSessionForRepo(repoPath: string) {
@@ -532,13 +557,23 @@ export default function App() {
       const session = await window.agentEditor.createSession({
         repoPath,
         name,
-        target: "local",
+        target: newSessionTarget,
+        sailbox:
+          newSessionTarget === "sailbox"
+            ? {
+                id: newSailboxId,
+                app: newSailboxApp,
+                name: newSailboxName || name,
+              }
+            : undefined,
       });
       setSessions((current) => [session, ...current]);
       setActiveSessionId(session.id);
       setRepo(await window.agentEditor.inspectRepo(session.worktreePath));
       rememberRecentRepo(session.repoPath);
       setSessionName("");
+      setNewSailboxId("");
+      setNewSailboxName("");
       setShowNewSession(false);
     } catch (nextError) {
       setError(
@@ -1094,6 +1129,41 @@ export default function App() {
               onChange={(event) => setSessionName(event.target.value)}
               placeholder="Name"
             />
+            <div className="segmented new-session-target">
+              <button
+                className={newSessionTarget === "local" ? "selected" : ""}
+                onClick={() => setNewSessionTarget("local")}
+              >
+                Local
+              </button>
+              <button
+                className={newSessionTarget === "sailbox" ? "selected" : ""}
+                onClick={() => setNewSessionTarget("sailbox")}
+              >
+                Sailbox
+              </button>
+            </div>
+            {newSessionTarget === "sailbox" ? (
+              <div className="sailbox-fields">
+                <input
+                  value={newSailboxId}
+                  onChange={(event) => setNewSailboxId(event.target.value)}
+                  placeholder="Sailbox ID"
+                />
+                <div className="sailbox-create-fields">
+                  <input
+                    value={newSailboxApp}
+                    onChange={(event) => setNewSailboxApp(event.target.value)}
+                    placeholder="App"
+                  />
+                  <input
+                    value={newSailboxName}
+                    onChange={(event) => setNewSailboxName(event.target.value)}
+                    placeholder="Sailbox name"
+                  />
+                </div>
+              </div>
+            ) : null}
             <div className="repo-list">
               {recentRepoPaths.map((repoPath) => (
                 <button
@@ -1648,24 +1718,68 @@ function basename(repoPath: string) {
 }
 
 function commandForAgent(session: SessionRecord, profile: AgentProfile) {
+  let command = profile.command;
+
   if (profile.id === "claude") {
     const claudeSessionId = session.agentSessions?.claude;
     if (claudeSessionId) {
-      const promptFlag = ` --append-system-prompt ${shellQuote(terminalAccessPrompt())}`;
-      return session.forkedAgentSessions?.claude
+      const promptFlag = ` --append-system-prompt ${shellQuote(terminalAccessPrompt(session.target))}`;
+      command = session.forkedAgentSessions?.claude
         ? `claude --resume ${shellQuote(claudeSessionId)}${promptFlag}`
         : `claude --session-id ${shellQuote(claudeSessionId)}${promptFlag}`;
     }
   }
 
   if (profile.id === "codex") {
-    return `codex ${shellQuote(terminalAccessPrompt())}`;
+    command = `codex ${shellQuote(terminalAccessPrompt(session.target))}`;
   }
 
-  return profile.command;
+  return wrapSailboxCommand(session, command, true);
 }
 
-function terminalAccessPrompt() {
+function commandForShell(session: SessionRecord) {
+  if (session.target !== "sailbox") {
+    return undefined;
+  }
+
+  return wrapSailboxCommand(session, "/bin/bash -l", true);
+}
+
+function wrapSailboxCommand(
+  session: SessionRecord,
+  command: string,
+  interactive = false,
+) {
+  if (session.target !== "sailbox") {
+    return command;
+  }
+
+  const sailboxId = session.sailbox?.id;
+  const workdir = session.sailbox?.workdir;
+  if (!sailboxId || !workdir) {
+    return command;
+  }
+
+  return [
+    "sail box exec",
+    "--stdin",
+    interactive ? "--tty" : "",
+    "--cwd",
+    shellQuote(workdir),
+    shellQuote(sailboxId),
+    "/bin/sh",
+    "-lc",
+    shellQuote(command),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function terminalAccessPrompt(target: RuntimeTarget) {
+  if (target === "sailbox") {
+    return "You are running inside Editor in a Sailbox workspace. The paired terminal is attached to the same Sailbox and working directory.";
+  }
+
   return "You are running inside Editor. You can inspect the paired terminal for this session by running `editor-terminal lines 200` for recent terminal output, `editor-terminal commands 20` for recent commands, or `editor-terminal paths` for the backing files.";
 }
 

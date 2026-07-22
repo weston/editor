@@ -27,6 +27,7 @@ export type SessionRecord = {
     app?: string;
     name?: string;
     id?: string;
+    workdir?: string;
   };
   createdAt: number;
   updatedAt: number;

@@ -238,6 +238,21 @@ textarea {
   gap: 4px;
 }
 
+.new-session-target {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sailbox-fields {
+  display: grid;
+  gap: 6px;
+}
+
+.sailbox-create-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+
 .repo-list button {
   display: grid;
   gap: 2px;
@@ -731,6 +746,7 @@ textarea {
 .xterm-host {
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: 10px;
 }
 
@@ -746,7 +762,13 @@ textarea {
 }
 
 .xterm {
+  width: 100%;
+  max-width: 100%;
   height: 100%;
+}
+
+.xterm .xterm-screen {
+  max-width: 100%;
 }
 
 .xterm .xterm-viewport {

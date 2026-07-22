@@ -244,6 +244,61 @@ async function createSailbox(
   return parsed.sailbox_id;
 }
 
+async function syncWorktreeToSailbox(
+  sailboxId: string,
+  worktreePath: string,
+  remoteWorkdir: string,
+) {
+  await new Promise<void>((resolve, reject) => {
+    const tar = spawn("tar", ["--exclude", ".git", "-czf", "-", "."], {
+      cwd: worktreePath,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const sail = spawn(
+      "sail",
+      [
+        "box",
+        "exec",
+        "--stdin",
+        sailboxId,
+        "/bin/sh",
+        "-lc",
+        `rm -rf ${shellQuote(remoteWorkdir)} && mkdir -p ${shellQuote(remoteWorkdir)} && tar -xzf - -C ${shellQuote(remoteWorkdir)}`,
+      ],
+      {
+        cwd: worktreePath,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    const stderr: Buffer[] = [];
+
+    tar.stdout.pipe(sail.stdin);
+    tar.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    sail.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    tar.on("error", reject);
+    sail.on("error", reject);
+    tar.on("exit", (code) => {
+      if (code !== 0) {
+        sail.kill();
+        reject(
+          new Error(Buffer.concat(stderr).toString() || `tar exited ${code}`),
+        );
+      }
+    });
+    sail.on("exit", (code) => {
+      if (code !== 0) {
+        reject(
+          new Error(
+            Buffer.concat(stderr).toString() || `sail box exec exited ${code}`,
+          ),
+        );
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 async function inspectRepo(repoPath: string): Promise<RepoSnapshot> {
   const rootPath = await execGit(repoPath, ["rev-parse", "--show-toplevel"]);
   const branch = await execGit(rootPath, ["branch", "--show-current"]).catch(
@@ -309,6 +364,7 @@ async function createSessionFrom(
     input.target === "sailbox"
       ? await createSailbox(input.sailbox ?? {}, snapshot.rootPath)
       : undefined;
+  const sailboxWorkdir = sailboxId ? `/workspace/editor/${slug}` : undefined;
 
   await mkdir(path.dirname(worktreePath), { recursive: true });
 
@@ -346,6 +402,7 @@ async function createSessionFrom(
             app: input.sailbox?.app?.trim() || undefined,
             name: input.sailbox?.name?.trim() || undefined,
             id: sailboxId,
+            workdir: sailboxWorkdir,
           }
         : undefined,
     createdAt: now,
@@ -355,6 +412,10 @@ async function createSessionFrom(
   if (sourceSession) {
     await copyWorktreeChanges(sourceSession.worktreePath, worktreePath, slug);
     await forkClaudeSession(sourceSession, session);
+  }
+
+  if (sailboxId && sailboxWorkdir) {
+    await syncWorktreeToSailbox(sailboxId, worktreePath, sailboxWorkdir);
   }
 
   if (sourceSession?.agentSessions?.claude) {
