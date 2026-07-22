@@ -402,6 +402,7 @@ export default function App() {
 
     if (event.type === "exit") {
       terminal.write(`\r\n[exited ${event.code ?? event.signal ?? 0}]\r\n`);
+      startedTerminalIdsRef.current.delete(event.terminalId);
       setExitedTerminalIds((current) => new Set(current).add(event.terminalId));
       markAgentFinished(event.terminalId);
       return;
@@ -447,6 +448,12 @@ export default function App() {
   }) {
     if (current?.id === terminalId) {
       refitMountedTerminal(current);
+      ensureTerminalStarted(
+        terminalId,
+        cwd,
+        command,
+        terminalCacheRef.current.get(terminalId),
+      );
       return current;
     }
 
@@ -460,7 +467,6 @@ export default function App() {
       cached.terminal.open(container);
     }
     fitAndResizeTerminal(terminalId, cached, container);
-    ensureTerminalStarted(terminalId, cwd, command, cached);
     cached.terminal.focus();
 
     const resizeObserver = new ResizeObserver(() => {
@@ -473,9 +479,10 @@ export default function App() {
         fitAndResizeTerminal(terminalId, cached, container),
       ),
       requestAnimationFrame(() => {
-        requestAnimationFrame(() =>
-          fitAndResizeTerminal(terminalId, cached, container),
-        );
+        requestAnimationFrame(() => {
+          fitAndResizeTerminal(terminalId, cached, container);
+          ensureTerminalStarted(terminalId, cwd, command, cached);
+        });
       }),
     ];
 
@@ -503,8 +510,12 @@ export default function App() {
     terminalId: string,
     cwd: string,
     command: string | undefined,
-    cached: CachedTerminal,
+    cached: CachedTerminal | undefined,
   ) {
+    if (!cached) {
+      return;
+    }
+
     if (startedTerminalIdsRef.current.has(terminalId)) {
       return;
     }

@@ -777,11 +777,6 @@ textarea {
   height: 100%;
 }
 
-.xterm .xterm-screen {
-  max-width: 100%;
-  overflow: hidden;
-}
-
 .xterm .xterm-viewport {
   background: #171717 !important;
 }
