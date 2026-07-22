@@ -57,6 +57,7 @@ const shortcutStorageKey = "agent-editor:shortcuts";
 const splitStorageKey = "agent-editor:panel-split";
 const notesDraftStorageKey = "agent-editor:note-drafts";
 const graphiteUrlPattern = /https:\/\/(?:app\.)?graphite\.dev\/[^\s"'<>)]*/g;
+let measuredCellWidthCache = 0;
 
 type MountedTerminal = {
   id: string;
@@ -530,13 +531,8 @@ export default function App() {
         cached.terminal.rows,
       )
       .then(() => {
-        window.agentEditor
-          .resizeTerminal(
-            terminalId,
-            cached.terminal.cols,
-            cached.terminal.rows,
-          )
-          .catch(() => undefined);
+        forceTerminalResize(terminalId, cached);
+        requestAnimationFrame(() => forceTerminalResize(terminalId, cached));
       })
       .catch((nextError) => {
         startedTerminalIdsRef.current.delete(terminalId);
@@ -546,32 +542,32 @@ export default function App() {
       });
   }
 
+  function forceTerminalResize(terminalId: string, cached: CachedTerminal) {
+    cached.terminal.resize(cached.terminal.cols, cached.terminal.rows);
+    window.agentEditor
+      .resizeTerminal(terminalId, cached.terminal.cols, cached.terminal.rows)
+      .catch(() => undefined);
+  }
+
   function clampTerminalColumns(
     cached: CachedTerminal,
     container?: HTMLDivElement,
   ) {
-    if (!container || !cached.terminal.element) {
+    if (!container) {
       return;
     }
 
-    const screen = cached.terminal.element.querySelector(".xterm-screen");
-    if (!(screen instanceof HTMLElement)) {
-      return;
+    const maxCols = measuredTerminalColumns(container);
+    if (cached.terminal.cols > maxCols) {
+      cached.terminal.resize(maxCols, cached.terminal.rows);
     }
+  }
 
-    const available = terminalContentWidth(container);
-    const rendered = screen.getBoundingClientRect().width;
-    if (rendered <= available + 1 || cached.terminal.cols <= 20) {
-      return;
-    }
-
-    const nextCols = Math.max(
+  function measuredTerminalColumns(container: HTMLDivElement) {
+    return Math.max(
       20,
-      Math.floor((cached.terminal.cols * available) / rendered) - 1,
+      Math.floor(terminalContentWidth(container) / measuredCellWidth()) - 2,
     );
-    if (nextCols < cached.terminal.cols) {
-      cached.terminal.resize(nextCols, cached.terminal.rows);
-    }
   }
 
   function terminalContentWidth(container: HTMLDivElement) {
@@ -580,6 +576,26 @@ export default function App() {
       Number.parseFloat(style.paddingLeft) +
       Number.parseFloat(style.paddingRight);
     return Math.max(20, container.clientWidth - padding);
+  }
+
+  function measuredCellWidth() {
+    if (measuredCellWidthCache) {
+      return measuredCellWidthCache;
+    }
+
+    const probe = document.createElement("span");
+    probe.textContent = "00000000000000000000";
+    probe.style.position = "fixed";
+    probe.style.left = "-9999px";
+    probe.style.top = "-9999px";
+    probe.style.fontFamily = '"SF Mono", Menlo, ui-monospace, monospace';
+    probe.style.fontSize = "12px";
+    probe.style.letterSpacing = "0";
+    probe.style.whiteSpace = "pre";
+    document.body.appendChild(probe);
+    measuredCellWidthCache = probe.getBoundingClientRect().width / 20;
+    probe.remove();
+    return measuredCellWidthCache || 7.5;
   }
 
   function refitMountedTerminal(mounted: MountedTerminal | null) {
