@@ -806,7 +806,7 @@ function parseGraphiteUrls(value: string) {
   return [
     ...new Set(
       value
-        .match(/https:\/\/(?:app\.)?graphite\.dev\/[^\s"'<>)]*/g)
+        .match(/https:\/\/(?:app\.)?graphite\.(?:com|dev)\/[^\s"'<>)]*/g)
         ?.map((url) => url.replace(/[.,;:]+$/, "")) ?? [],
     ),
   ];

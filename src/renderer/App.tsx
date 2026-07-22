@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -64,7 +65,8 @@ const defaultShortcuts: Shortcuts = {
 const shortcutStorageKey = "agent-editor:shortcuts";
 const splitStorageKey = "agent-editor:panel-split";
 const notesDraftStorageKey = "agent-editor:note-drafts";
-const graphiteUrlPattern = /https:\/\/(?:app\.)?graphite\.dev\/[^\s"'<>)]*/g;
+const graphiteUrlPattern =
+  /https:\/\/(?:app\.)?graphite\.(?:com|dev)\/[^\s"'<>)]*/g;
 const agentIdleAfterMs = 4000;
 const typingEchoMs = 1500;
 let measuredCellWidthCache = 0;
@@ -720,6 +722,13 @@ export default function App() {
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
+    terminal.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        if (event.metaKey) {
+          window.agentEditor.openExternal(uri).catch(() => undefined);
+        }
+      }),
+    );
     terminal.attachCustomKeyEventHandler((event) =>
       handleTerminalKeyEvent(event, terminalId, terminal),
     );
