@@ -91,6 +91,7 @@ export default function App() {
   const [profile, setProfile] = useState<AgentProfileId>("claude");
   const [showNewSession, setShowNewSession] = useState(false);
   const [sessionName, setSessionName] = useState("");
+  const [creatingSession, setCreatingSession] = useState(false);
   const [newSessionTarget, setNewSessionTarget] =
     useState<RuntimeTarget>("local");
   const [newSailboxId, setNewSailboxId] = useState("");
@@ -204,6 +205,26 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(splitStorageKey, String(splitPercent));
   }, [splitPercent]);
+
+  useEffect(() => {
+    refitMountedTerminal(mountedAgentRef.current);
+    refitMountedTerminal(mountedShellRef.current);
+  }, [
+    splitPercent,
+    activeAgentTerminalId,
+    activeShellTerminalId,
+    rightPaneMode,
+  ]);
+
+  useEffect(() => {
+    const refit = () => {
+      refitMountedTerminal(mountedAgentRef.current);
+      refitMountedTerminal(mountedShellRef.current);
+    };
+
+    window.addEventListener("resize", refit);
+    return () => window.removeEventListener("resize", refit);
+  }, []);
 
   useEffect(() => {
     focusedPanelRef.current = focusedPanel;
@@ -423,6 +444,7 @@ export default function App() {
     command?: string;
   }) {
     if (current?.id === terminalId) {
+      refitMountedTerminal(current);
       return current;
     }
 
@@ -462,6 +484,21 @@ export default function App() {
     window.agentEditor
       .resizeTerminal(terminalId, cached.terminal.cols, cached.terminal.rows)
       .catch(() => undefined);
+  }
+
+  function refitMountedTerminal(mounted: MountedTerminal | null) {
+    if (!mounted) {
+      return;
+    }
+
+    const cached = terminalCacheRef.current.get(mounted.id);
+    if (!cached) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      fitAndResizeTerminal(mounted.id, cached);
+    });
   }
 
   function getOrCreateTerminal(
@@ -550,8 +587,13 @@ export default function App() {
   }
 
   async function createSessionForRepo(repoPath: string) {
+    if (creatingSession) {
+      return;
+    }
+
     const name = sessionName.trim() || `Session ${sessions.length + 1}`;
     setError("");
+    setCreatingSession(true);
 
     try {
       const session = await window.agentEditor.createSession({
@@ -579,10 +621,16 @@ export default function App() {
       setError(
         nextError instanceof Error ? nextError.message : String(nextError),
       );
+    } finally {
+      setCreatingSession(false);
     }
   }
 
   async function chooseRepoForNewSession() {
+    if (creatingSession) {
+      return;
+    }
+
     setError("");
 
     try {
@@ -1120,7 +1168,10 @@ export default function App() {
           <section className="new-session-sheet">
             <div className="sheet-head">
               <h2>New Session</h2>
-              <button onClick={() => setShowNewSession(false)}>
+              <button
+                onClick={() => setShowNewSession(false)}
+                disabled={creatingSession}
+              >
                 <X size={14} />
               </button>
             </div>
@@ -1128,17 +1179,20 @@ export default function App() {
               value={sessionName}
               onChange={(event) => setSessionName(event.target.value)}
               placeholder="Name"
+              disabled={creatingSession}
             />
             <div className="segmented new-session-target">
               <button
                 className={newSessionTarget === "local" ? "selected" : ""}
                 onClick={() => setNewSessionTarget("local")}
+                disabled={creatingSession}
               >
                 Local
               </button>
               <button
                 className={newSessionTarget === "sailbox" ? "selected" : ""}
                 onClick={() => setNewSessionTarget("sailbox")}
+                disabled={creatingSession}
               >
                 Sailbox
               </button>
@@ -1149,17 +1203,20 @@ export default function App() {
                   value={newSailboxId}
                   onChange={(event) => setNewSailboxId(event.target.value)}
                   placeholder="Sailbox ID"
+                  disabled={creatingSession}
                 />
                 <div className="sailbox-create-fields">
                   <input
                     value={newSailboxApp}
                     onChange={(event) => setNewSailboxApp(event.target.value)}
                     placeholder="App"
+                    disabled={creatingSession}
                   />
                   <input
                     value={newSailboxName}
                     onChange={(event) => setNewSailboxName(event.target.value)}
                     placeholder="Sailbox name"
+                    disabled={creatingSession}
                   />
                 </div>
               </div>
@@ -1169,12 +1226,16 @@ export default function App() {
                 <button
                   key={repoPath}
                   onClick={() => createSessionForRepo(repoPath)}
+                  disabled={creatingSession}
                 >
                   <span>{basename(repoPath)}</span>
                   <small>{repoPath}</small>
                 </button>
               ))}
-              <button onClick={chooseRepoForNewSession}>
+              <button
+                onClick={chooseRepoForNewSession}
+                disabled={creatingSession}
+              >
                 <span>Choose repo</span>
               </button>
             </div>
