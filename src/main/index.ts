@@ -8,6 +8,7 @@ import {
 } from "electron";
 import {
   execFile,
+  execFileSync,
   spawn,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
@@ -49,6 +50,7 @@ type StoredState = {
 const processes = new Map<string, ChildProcessWithoutNullStreams>();
 const terminalProcesses = new Map<string, pty.IPty>();
 const terminalInputStates = new Map<string, { input: string }>();
+let cachedShellPath: string | undefined;
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -1058,7 +1060,7 @@ function terminalEnv(terminalId?: string): NodeJS.ProcessEnv {
     : undefined;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PATH: `${editorBinDir()}:${process.env.PATH ?? ""}`,
+    PATH: editorPath(),
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
     CLICOLOR: "1",
@@ -1075,6 +1077,43 @@ function terminalEnv(terminalId?: string): NodeJS.ProcessEnv {
 
   delete env.NO_COLOR;
   return env;
+}
+
+function editorPath() {
+  return [
+    editorBinDir(),
+    shellLoginPath(),
+    process.env.PATH,
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    path.join(homedir(), ".local", "bin"),
+    path.join(homedir(), ".sail", "bin"),
+    path.join(homedir(), "go", "bin"),
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ]
+    .filter(Boolean)
+    .join(":");
+}
+
+function shellLoginPath() {
+  if (cachedShellPath !== undefined) {
+    return cachedShellPath;
+  }
+
+  try {
+    cachedShellPath = execFileSync(process.env.SHELL || "/bin/zsh", [
+      "-lc",
+      'printf %s "$PATH"',
+    ]).toString();
+  } catch {
+    cachedShellPath = "";
+  }
+
+  return cachedShellPath;
 }
 
 function pairedShellTerminalId(terminalId: string) {
