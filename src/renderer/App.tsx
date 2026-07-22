@@ -65,6 +65,7 @@ const shortcutStorageKey = "agent-editor:shortcuts";
 const splitStorageKey = "agent-editor:panel-split";
 const notesDraftStorageKey = "agent-editor:note-drafts";
 const graphiteUrlPattern = /https:\/\/(?:app\.)?graphite\.dev\/[^\s"'<>)]*/g;
+const agentIdleAfterMs = 2500;
 let measuredCellWidthCache = 0;
 
 type MountedTerminal = {
@@ -129,6 +130,9 @@ export default function App() {
   const [finishedAgentIds, setFinishedAgentIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [workingAgentIds, setWorkingAgentIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [capturingShortcut, setCapturingShortcut] =
     useState<ShortcutTarget | null>(null);
   const [shortcuts, setShortcuts] = useState<Shortcuts>(loadShortcuts);
@@ -153,6 +157,8 @@ export default function App() {
   const activeSessionIdRef = useRef("");
   const activeAgentTerminalIdRef = useRef("");
   const notesSaveTimersRef = useRef(new Map<string, number>());
+  const agentOutputAtRef = useRef(new Map<string, number>());
+  const workingAgentIdsRef = useRef<Set<string>>(new Set());
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId),
@@ -198,6 +204,16 @@ export default function App() {
         ]),
       ]
     : [];
+  const workingSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const terminalId of workingAgentIds) {
+      const sessionId = sessionIdFromTerminalId(terminalId);
+      if (sessionId) {
+        ids.add(sessionId);
+      }
+    }
+    return ids;
+  }, [workingAgentIds]);
   const activeAgentTerminalId = activeSession
     ? agentTerminalId(activeSession.id, profile)
     : "";
@@ -235,6 +251,42 @@ export default function App() {
 
     window.addEventListener("resize", refit);
     return () => window.removeEventListener("resize", refit);
+  }, []);
+
+  useEffect(() => {
+    const tick = () => {
+      const now = Date.now();
+      const next = new Set<string>();
+      for (const [terminalId, at] of agentOutputAtRef.current) {
+        if (now - at < agentIdleAfterMs) {
+          next.add(terminalId);
+        }
+      }
+
+      const previous = workingAgentIdsRef.current;
+      let changed = next.size !== previous.size;
+      for (const terminalId of previous) {
+        if (!next.has(terminalId)) {
+          changed = true;
+          markAgentFinished(terminalId);
+        }
+      }
+      if (!changed) {
+        for (const terminalId of next) {
+          if (!previous.has(terminalId)) {
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        workingAgentIdsRef.current = next;
+        setWorkingAgentIds(next);
+      }
+    };
+
+    const timer = window.setInterval(tick, 400);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -412,6 +464,7 @@ export default function App() {
     if (event.type === "exit") {
       terminal.write(`\r\n[exited ${event.code ?? event.signal ?? 0}]\r\n`);
       startedTerminalIdsRef.current.delete(event.terminalId);
+      agentOutputAtRef.current.delete(event.terminalId);
       setExitedTerminalIds((current) => new Set(current).add(event.terminalId));
       markAgentFinished(event.terminalId);
       return;
@@ -424,6 +477,9 @@ export default function App() {
 
     const data = event.data ?? "";
     terminal.write(data);
+    if (data && event.terminalId.startsWith("agent:")) {
+      agentOutputAtRef.current.set(event.terminalId, Date.now());
+    }
     captureGraphiteUrl(event.terminalId, data);
   }
 
@@ -1364,6 +1420,7 @@ export default function App() {
                 session,
                 activeSessionId,
                 finishedAgentIds,
+                workingSessionIds,
               )}
               key={session.id}
             >
@@ -1500,7 +1557,18 @@ export default function App() {
                     className="session-main"
                     onClick={() => selectSession(session)}
                   >
-                    <span>{session.name}</span>
+                    <span className="session-title">
+                      <span className="session-name">{session.name}</span>
+                      {workingSessionIds.has(session.id) ? (
+                        <span className="status-dots" aria-hidden="true">
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                      ) : sessionHasFinishedAgent(session, finishedAgentIds) ? (
+                        <span className="status-done" aria-hidden="true" />
+                      ) : null}
+                    </span>
                     <small>{session.branch}</small>
                   </button>
                   <div className="session-actions">
@@ -2002,20 +2070,28 @@ function sessionItemClassName(
   session: SessionRecord,
   activeSessionId: string,
   finishedAgentIds: Set<string>,
+  workingSessionIds: Set<string>,
 ) {
   const classNames = ["session-item"];
   if (session.id === activeSessionId) {
     classNames.push("active");
   }
-  if (
-    [...finishedAgentIds].some((terminalId) =>
-      terminalId.startsWith(`agent:${session.id}:`),
-    )
-  ) {
+  if (workingSessionIds.has(session.id)) {
+    classNames.push("agent-working");
+  } else if (sessionHasFinishedAgent(session, finishedAgentIds)) {
     classNames.push("agent-finished");
   }
 
   return classNames.join(" ");
+}
+
+function sessionHasFinishedAgent(
+  session: SessionRecord,
+  finishedAgentIds: Set<string>,
+) {
+  return [...finishedAgentIds].some((terminalId) =>
+    terminalId.startsWith(`agent:${session.id}:`),
+  );
 }
 
 function normalizeTerminalText(value: string) {
