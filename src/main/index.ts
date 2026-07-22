@@ -16,8 +16,10 @@ import {
   appendFile,
   cp,
   mkdir,
+  readdir,
   readFile,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -243,6 +245,9 @@ async function createSessionFrom(
   const baseRef = sourceSession
     ? await execGit(sourceSession.worktreePath, ["rev-parse", "HEAD"])
     : "HEAD";
+  const agentSessions: SessionRecord["agentSessions"] = {
+    claude: randomUUID(),
+  };
   const sailboxId =
     input.target === "sailbox"
       ? await createSailbox(input.sailbox ?? {}, snapshot.rootPath)
@@ -277,6 +282,7 @@ async function createSessionFrom(
     repoPath: snapshot.rootPath,
     worktreePath,
     branch,
+    agentSessions,
     sailbox:
       input.target === "sailbox"
         ? {
@@ -291,11 +297,32 @@ async function createSessionFrom(
 
   if (sourceSession) {
     await copyWorktreeChanges(sourceSession.worktreePath, worktreePath, slug);
+    await forkClaudeSession(sourceSession, session);
   }
+
+  if (sourceSession?.agentSessions?.claude) {
+    session.forkedAgentSessions = {
+      claude: sourceSession.agentSessions.claude,
+    };
+  }
+
+  const existingSessions = sourceSession
+    ? state.sessions.map((existingSession) =>
+        existingSession.id === sourceSession.id
+          ? {
+              ...existingSession,
+              agentSessions: {
+                ...existingSession.agentSessions,
+                ...sourceSession.agentSessions,
+              },
+            }
+          : existingSession,
+      )
+    : state.sessions;
 
   await writeState({
     ...rememberRepo(state, snapshot.rootPath),
-    sessions: [session, ...state.sessions],
+    sessions: [session, ...existingSessions],
   });
 
   return session;
@@ -355,6 +382,77 @@ async function copyWorktreeChanges(
   );
 }
 
+async function forkClaudeSession(
+  sourceSession: SessionRecord,
+  targetSession: SessionRecord,
+) {
+  const sourceClaudeId =
+    sourceSession.agentSessions?.claude ??
+    (await latestClaudeSessionId(sourceSession.worktreePath));
+  const targetClaudeId = targetSession.agentSessions?.claude;
+
+  if (!sourceClaudeId || !targetClaudeId) {
+    return;
+  }
+
+  const sourcePath = path.join(
+    claudeProjectPath(sourceSession.worktreePath),
+    `${sourceClaudeId}.jsonl`,
+  );
+  const targetProjectPath = claudeProjectPath(targetSession.worktreePath);
+  const targetPath = path.join(targetProjectPath, `${targetClaudeId}.jsonl`);
+  const sourceRaw = await readFile(sourcePath, "utf8").catch(() => "");
+  if (!sourceRaw) {
+    return;
+  }
+
+  await mkdir(targetProjectPath, { recursive: true });
+  await writeFile(
+    targetPath,
+    sourceRaw
+      .replaceAll(sourceClaudeId, targetClaudeId)
+      .replaceAll(sourceSession.worktreePath, targetSession.worktreePath)
+      .replaceAll(sourceSession.branch, targetSession.branch),
+    "utf8",
+  );
+  sourceSession.agentSessions = {
+    ...sourceSession.agentSessions,
+    claude: sourceClaudeId,
+  };
+}
+
+async function latestClaudeSessionId(worktreePath: string) {
+  const projectPath = claudeProjectPath(worktreePath);
+  const entries = await readdir(projectPath).catch(() => []);
+  const files = await Promise.all(
+    entries
+      .filter((entry) => entry.endsWith(".jsonl"))
+      .map(async (entry) => {
+        const filePath = path.join(projectPath, entry);
+        const stats = await stat(filePath);
+        return {
+          id: path.basename(entry, ".jsonl"),
+          mtimeMs: stats.mtimeMs,
+        };
+      }),
+  );
+
+  return files.sort((left, right) => right.mtimeMs - left.mtimeMs)[0]?.id;
+}
+
+function claudeProjectPath(worktreePath: string) {
+  return path.join(
+    homedir(),
+    ".claude",
+    "projects",
+    claudeProjectSlug(worktreePath),
+  );
+}
+
+function claudeProjectSlug(worktreePath: string) {
+  return worktreePath.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
 async function forkSession(input: ForkSessionInput): Promise<SessionRecord> {
   const state = await readState();
   const sourceSession = state.sessions.find(
@@ -404,6 +502,8 @@ async function updateSession(
           ? session.linearIssue
           : (input.linearIssue ?? undefined),
       notes: input.notes ?? session.notes,
+      notesUndoStack: input.notesUndoStack ?? session.notesUndoStack,
+      notesRedoStack: input.notesRedoStack ?? session.notesRedoStack,
       updatedAt: now,
     };
     return updatedSession;

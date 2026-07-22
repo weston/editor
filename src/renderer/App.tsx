@@ -4,12 +4,10 @@ import "@xterm/xterm/css/xterm.css";
 import {
   Archive,
   Check,
-  Copy,
   ExternalLink,
   FileText,
   GitFork,
   GitPullRequest,
-  History,
   Keyboard,
   Link2,
   Pencil,
@@ -17,8 +15,10 @@ import {
   PinOff,
   Plus,
   RotateCcw,
+  Redo2,
   Send,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -53,6 +53,7 @@ const defaultShortcuts: Shortcuts = {
 
 const shortcutStorageKey = "agent-editor:shortcuts";
 const splitStorageKey = "agent-editor:panel-split";
+const notesDraftStorageKey = "agent-editor:note-drafts";
 const graphiteUrlPattern = /https:\/\/(?:app\.)?graphite\.dev\/[^\s"'<>)]*/g;
 
 type MountedTerminal = {
@@ -87,6 +88,11 @@ type CloseOptions = {
   git: boolean;
   archive: boolean;
 };
+type NotesState = {
+  notes: string;
+  notesUndoStack: string[];
+  notesRedoStack: string[];
+};
 
 export default function App() {
   const [repo, setRepo] = useState<RepoSnapshot>(emptySnapshot);
@@ -110,7 +116,6 @@ export default function App() {
   const [showArchived, setShowArchived] = useState(false);
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("terminal");
   const [commandBlocks, setCommandBlocks] = useState<CommandBlock[]>([]);
-  const [showCommandHistory, setShowCommandHistory] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showPrMenu, setShowPrMenu] = useState(false);
   const [focusedPanel, setFocusedPanel] = useState<ShortcutTarget>("agent");
@@ -128,6 +133,7 @@ export default function App() {
   const terminalPanelRef = useRef<HTMLElement>(null);
   const agentContainerRef = useRef<HTMLDivElement>(null);
   const shellContainerRef = useRef<HTMLDivElement>(null);
+  const notesEditorRef = useRef<HTMLTextAreaElement>(null);
   const mountedAgentRef = useRef<MountedTerminal | null>(null);
   const mountedShellRef = useRef<MountedTerminal | null>(null);
   const terminalsRef = useRef(new Map<string, Terminal>());
@@ -165,6 +171,9 @@ export default function App() {
   );
   const currentProfile =
     profiles.find((item) => item.id === profile) ?? profiles[0];
+  const agentCommand = activeSession
+    ? commandForAgent(activeSession, currentProfile)
+    : currentProfile.command;
   const activeContext = activeSession?.id || repo.rootPath || "";
   const activeRepoName = activeSession
     ? basename(activeSession.repoPath)
@@ -192,7 +201,6 @@ export default function App() {
         .slice(0, 8),
     [activeShellTerminalId, commandBlocks],
   );
-  const lastCommandBlock = terminalHistory[0];
   const workspaceGridStyle: CSSProperties = {
     gridTemplateColumns: `minmax(320px, ${splitPercent}%) 8px minmax(280px, 1fr)`,
   };
@@ -243,10 +251,6 @@ export default function App() {
         setCapturingShortcut(null);
         setShowPrMenu(false);
       }
-
-      if (!terminalPanelRef.current?.contains(target)) {
-        setShowCommandHistory(false);
-      }
     };
 
     window.addEventListener("pointerdown", onPointerDown);
@@ -255,11 +259,12 @@ export default function App() {
 
   useEffect(() => {
     window.agentEditor.loadState().then(async (state) => {
-      setSessions(state.sessions);
+      const sessionsWithDrafts = state.sessions.map(applyStoredNotesDraft);
+      setSessions(sessionsWithDrafts);
       setRecentRepoPaths(state.recentRepoPaths ?? []);
-      setActiveSessionId(state.sessions[0]?.id ?? "");
+      setActiveSessionId(sessionsWithDrafts[0]?.id ?? "");
       graphiteUrlsRef.current = new Map(
-        state.sessions
+        sessionsWithDrafts
           .filter(
             (session) =>
               session.graphitePrUrl || session.graphitePrUrls?.length,
@@ -335,18 +340,14 @@ export default function App() {
       current: mountedAgentRef.current,
       terminalId: activeAgentTerminalId,
       cwd: activeSession.worktreePath,
-      command: currentProfile.command,
+      command: agentCommand,
     });
 
     return () => {
       detachMounted(mountedAgentRef.current);
       mountedAgentRef.current = null;
     };
-  }, [
-    activeAgentTerminalId,
-    activeSession?.worktreePath,
-    currentProfile.command,
-  ]);
+  }, [activeAgentTerminalId, activeSession?.worktreePath, agentCommand]);
 
   useEffect(() => {
     if (
@@ -735,10 +736,56 @@ export default function App() {
     }
   }
 
-  function updateSessionNotes(sessionId: string, notes: string) {
+  function updateSessionNotes(session: SessionRecord, notes: string) {
+    const previousNotes = session.notes ?? "";
+    if (notes === previousNotes) {
+      return;
+    }
+
+    const undoStack = [...(session.notesUndoStack ?? []), previousNotes];
+    const redoStack: string[] = [];
+    updateNotesState(session.id, notes, undoStack, redoStack);
+  }
+
+  function undoNotes(session: SessionRecord) {
+    const undoStack = session.notesUndoStack ?? [];
+    const previousNotes = undoStack.at(-1);
+    if (previousNotes === undefined) {
+      return;
+    }
+
+    updateNotesState(session.id, previousNotes, undoStack.slice(0, -1), [
+      ...(session.notesRedoStack ?? []),
+      session.notes ?? "",
+    ]);
+  }
+
+  function redoNotes(session: SessionRecord) {
+    const redoStack = session.notesRedoStack ?? [];
+    const nextNotes = redoStack.at(-1);
+    if (nextNotes === undefined) {
+      return;
+    }
+
+    updateNotesState(
+      session.id,
+      nextNotes,
+      [...(session.notesUndoStack ?? []), session.notes ?? ""],
+      redoStack.slice(0, -1),
+    );
+  }
+
+  function updateNotesState(
+    sessionId: string,
+    notes: string,
+    notesUndoStack: string[],
+    notesRedoStack: string[],
+  ) {
+    const updated = { notes, notesUndoStack, notesRedoStack };
+    writeNotesDraft(sessionId, updated);
     setSessions((current) =>
       current.map((session) =>
-        session.id === sessionId ? { ...session, notes } : session,
+        session.id === sessionId ? { ...session, ...updated } : session,
       ),
     );
 
@@ -750,7 +797,7 @@ export default function App() {
     const timer = window.setTimeout(() => {
       notesSaveTimersRef.current.delete(sessionId);
       window.agentEditor
-        .updateSession({ id: sessionId, notes })
+        .updateSession({ id: sessionId, ...updated })
         .catch((nextError) => {
           setError(
             nextError instanceof Error ? nextError.message : String(nextError),
@@ -853,16 +900,6 @@ export default function App() {
       .catch(() => undefined);
   }
 
-  async function copyShellSelection() {
-    const terminal = terminalsRef.current.get(activeShellTerminalId);
-    const selection = terminal?.getSelection();
-    if (!selection) {
-      return;
-    }
-
-    await navigator.clipboard.writeText(normalizeTerminalText(selection));
-  }
-
   function sendBlockToAgent(block: CommandBlock | undefined) {
     if (!block || !activeAgentTerminalId) {
       return;
@@ -872,6 +909,46 @@ export default function App() {
     window.agentEditor
       .sendTerminalInput(activeAgentTerminalId, text)
       .then(() => focusPanel("agent"))
+      .catch(() => undefined);
+  }
+
+  function sendRightPaneSelectionToAgent() {
+    if (!activeAgentTerminalId) {
+      return;
+    }
+
+    const text =
+      rightPaneMode === "notes"
+        ? selectedNotesText(notesEditorRef.current)
+        : selectedTerminalText(terminalsRef.current.get(activeShellTerminalId));
+    if (!text) {
+      return;
+    }
+
+    window.agentEditor
+      .sendTerminalInput(activeAgentTerminalId, text)
+      .then(() => focusPanel("agent"))
+      .catch(() => undefined);
+  }
+
+  function sendAgentSelectionToTerminal() {
+    if (!activeShellTerminalId) {
+      return;
+    }
+
+    const text = selectedTerminalText(
+      terminalsRef.current.get(activeAgentTerminalId),
+    );
+    if (!text) {
+      return;
+    }
+
+    window.agentEditor
+      .sendTerminalInput(activeShellTerminalId, text)
+      .then(() => {
+        setRightPaneMode("terminal");
+        focusPanel("terminal");
+      })
       .catch(() => undefined);
   }
 
@@ -1386,7 +1463,16 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <span>{currentProfile.command}</span>
+              <div className="agent-tools">
+                <span>{agentCommand}</span>
+                <button
+                  onClick={sendAgentSelectionToTerminal}
+                  disabled={!activeSession}
+                  title="Send selection to terminal"
+                >
+                  <Send size={13} />
+                </button>
+              </div>
             </div>
             <div className="xterm-host" ref={agentContainerRef} />
           </section>
@@ -1410,7 +1496,6 @@ export default function App() {
                   className={rightPaneMode === "notes" ? "selected" : ""}
                   onClick={() => {
                     setRightPaneMode("notes");
-                    setShowCommandHistory(false);
                   }}
                 >
                   Notes
@@ -1418,67 +1503,93 @@ export default function App() {
               </div>
               <div className="terminal-tools">
                 <button
-                  onClick={copyShellSelection}
-                  disabled={!activeSession || rightPaneMode !== "terminal"}
-                  title="Copy selection"
-                >
-                  <Copy size={13} />
-                </button>
-                <button
-                  onClick={() => sendBlockToAgent(lastCommandBlock)}
+                  onClick={() => sendBlockToAgent(terminalHistory[0])}
                   disabled={
-                    !lastCommandBlock ||
                     !activeSession ||
-                    rightPaneMode !== "terminal"
+                    rightPaneMode !== "terminal" ||
+                    terminalHistory.length === 0
                   }
                   title="Send last command"
                 >
                   <Send size={13} />
                 </button>
                 <button
-                  onClick={() => setShowCommandHistory((current) => !current)}
-                  disabled={
-                    terminalHistory.length === 0 || rightPaneMode !== "terminal"
-                  }
-                  title="Command history"
-                >
-                  <History size={13} />
-                </button>
-                <button
-                  onClick={openTerminalLog}
-                  disabled={!activeSession || rightPaneMode !== "terminal"}
-                  title="Open terminal log"
+                  onClick={sendRightPaneSelectionToAgent}
+                  disabled={!activeSession}
+                  title="Send selection"
                 >
                   <FileText size={13} />
                 </button>
+                {rightPaneMode === "notes" ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        if (activeSession) {
+                          undoNotes(activeSession);
+                        }
+                      }}
+                      disabled={
+                        !activeSession ||
+                        (activeSession.notesUndoStack ?? []).length === 0
+                      }
+                      title="Undo"
+                    >
+                      <Undo2 size={13} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (activeSession) {
+                          redoNotes(activeSession);
+                        }
+                      }}
+                      disabled={
+                        !activeSession ||
+                        (activeSession.notesRedoStack ?? []).length === 0
+                      }
+                      title="Redo"
+                    >
+                      <Redo2 size={13} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={openTerminalLog}
+                      disabled={!activeSession}
+                      title="Open terminal log"
+                    >
+                      <FileText size={13} />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
-            {showCommandHistory ? (
-              <div className="history-menu">
-                {terminalHistory.map((block) => (
-                  <button
-                    className="history-row"
-                    key={block.id}
-                    onClick={() => {
-                      sendBlockToAgent(block);
-                      setShowCommandHistory(false);
-                    }}
-                  >
-                    <span>{block.command}</span>
-                    <small>{commandBlockPreview(block)}</small>
-                  </button>
-                ))}
-              </div>
-            ) : null}
             {rightPaneMode === "terminal" ? (
               <div className="xterm-host" ref={shellContainerRef} />
             ) : (
               <textarea
                 className="notes-editor"
+                ref={notesEditorRef}
                 value={activeSession?.notes ?? ""}
                 onChange={(event) => {
                   if (activeSession) {
-                    updateSessionNotes(activeSession.id, event.target.value);
+                    updateSessionNotes(activeSession, event.target.value);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (!activeSession || !event.metaKey) {
+                    return;
+                  }
+
+                  if (normalizeKey(event.key) !== "Z") {
+                    return;
+                  }
+
+                  event.preventDefault();
+                  if (event.shiftKey) {
+                    redoNotes(activeSession);
+                  } else {
+                    undoNotes(activeSession);
                   }
                 }}
                 disabled={!activeSession}
@@ -1515,18 +1626,62 @@ function basename(repoPath: string) {
   return repoPath.split(/[\\/]/).filter(Boolean).at(-1) ?? repoPath;
 }
 
+function commandForAgent(session: SessionRecord, profile: AgentProfile) {
+  if (profile.id === "claude") {
+    const claudeSessionId = session.agentSessions?.claude;
+    if (claudeSessionId) {
+      return session.forkedAgentSessions?.claude
+        ? `claude --resume ${shellQuote(claudeSessionId)}`
+        : `claude --session-id ${shellQuote(claudeSessionId)}`;
+    }
+  }
+
+  return profile.command;
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 function commandBlockText(block: CommandBlock) {
   const output = stripTerminalControl(block.output).trim();
   return output ? `$ ${block.command}\n${output}` : `$ ${block.command}`;
 }
 
-function commandBlockPreview(block: CommandBlock) {
-  return (
-    stripTerminalControl(block.output)
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 180) || block.command
+function applyStoredNotesDraft(session: SessionRecord): SessionRecord {
+  const draft = readNotesDrafts()[session.id];
+  return draft ? { ...session, ...draft } : session;
+}
+
+function readNotesDrafts() {
+  try {
+    return JSON.parse(localStorage.getItem(notesDraftStorageKey) ?? "{}") as
+      | Record<string, NotesState>
+      | Record<string, never>;
+  } catch {
+    return {};
+  }
+}
+
+function writeNotesDraft(sessionId: string, notesState: NotesState) {
+  const drafts = readNotesDrafts();
+  localStorage.setItem(
+    notesDraftStorageKey,
+    JSON.stringify({ ...drafts, [sessionId]: notesState }),
   );
+}
+
+function selectedTerminalText(terminal: Terminal | undefined) {
+  const selection = terminal?.getSelection();
+  return selection ? normalizeTerminalText(selection) : "";
+}
+
+function selectedNotesText(element: HTMLTextAreaElement | null) {
+  if (!element) {
+    return "";
+  }
+
+  return element.value.slice(element.selectionStart, element.selectionEnd);
 }
 
 function sessionItemClassName(

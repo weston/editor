@@ -475,6 +475,33 @@ textarea {
   white-space: nowrap;
 }
 
+.agent-tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-tools button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 7px;
+  background: transparent;
+  color: #a6a6a6;
+}
+
+.agent-tools button:hover {
+  background: #242424;
+  color: #ececec;
+}
+
+.agent-tools button:disabled:hover {
+  background: transparent;
+}
+
 .terminal-panel {
   position: relative;
 }
@@ -541,7 +568,6 @@ textarea {
 }
 
 .shortcut-menu,
-.history-menu,
 .pr-menu {
   position: absolute;
   z-index: 5;
@@ -568,16 +594,7 @@ textarea {
   overflow: auto;
 }
 
-.history-menu {
-  top: 44px;
-  right: 8px;
-  max-width: min(420px, calc(100% - 16px));
-  max-height: min(340px, calc(100% - 56px));
-  overflow: auto;
-}
-
 .shortcut-row,
-.history-row,
 .pr-row {
   display: grid;
   align-items: center;
@@ -601,14 +618,6 @@ textarea {
   font-weight: 500;
 }
 
-.history-row {
-  gap: 3px;
-  min-width: 0;
-  padding: 6px 8px;
-}
-
-.history-row span,
-.history-row small,
 .pr-row span,
 .pr-row small {
   overflow: hidden;
@@ -616,13 +625,11 @@ textarea {
   white-space: nowrap;
 }
 
-.history-row span,
 .pr-row span {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 11px;
 }
 
-.history-row small,
 .pr-row small {
   color: #969696;
   font-size: 11px;
@@ -636,7 +643,6 @@ textarea {
 }
 
 .shortcut-row:hover,
-.history-row:hover,
 .pr-row:hover {
   background: #242424;
 }
