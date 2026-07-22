@@ -136,6 +136,7 @@ export default function App() {
   const mountedShellRef = useRef<MountedTerminal | null>(null);
   const terminalsRef = useRef(new Map<string, Terminal>());
   const terminalCacheRef = useRef(new Map<string, CachedTerminal>());
+  const startedTerminalIdsRef = useRef(new Set<string>());
   const graphiteUrlsRef = useRef(new Map<string, string[]>());
   const graphiteDetectionRef = useRef(new Set<string>());
   const shortcutsRef = useRef(shortcuts);
@@ -459,6 +460,7 @@ export default function App() {
       cached.terminal.open(container);
     }
     fitAndResizeTerminal(terminalId, cached, container);
+    ensureTerminalStarted(terminalId, cwd, command, cached);
     cached.terminal.focus();
 
     const resizeObserver = new ResizeObserver(() => {
@@ -495,6 +497,42 @@ export default function App() {
     window.agentEditor
       .resizeTerminal(terminalId, cached.terminal.cols, cached.terminal.rows)
       .catch(() => undefined);
+  }
+
+  function ensureTerminalStarted(
+    terminalId: string,
+    cwd: string,
+    command: string | undefined,
+    cached: CachedTerminal,
+  ) {
+    if (startedTerminalIdsRef.current.has(terminalId)) {
+      return;
+    }
+
+    startedTerminalIdsRef.current.add(terminalId);
+    window.agentEditor
+      .startTerminal(
+        terminalId,
+        cwd,
+        command,
+        cached.terminal.cols,
+        cached.terminal.rows,
+      )
+      .then(() => {
+        window.agentEditor
+          .resizeTerminal(
+            terminalId,
+            cached.terminal.cols,
+            cached.terminal.rows,
+          )
+          .catch(() => undefined);
+      })
+      .catch((nextError) => {
+        startedTerminalIdsRef.current.delete(terminalId);
+        cached.terminal.write(
+          `\r\n${nextError instanceof Error ? nextError.message : String(nextError)}\r\n`,
+        );
+      });
   }
 
   function clampTerminalColumns(
@@ -582,14 +620,6 @@ export default function App() {
         .catch(() => undefined);
     });
     terminalsRef.current.set(terminalId, terminal);
-
-    window.agentEditor
-      .startTerminal(terminalId, cwd, command)
-      .catch((nextError) => {
-        terminal.write(
-          `\r\n${nextError instanceof Error ? nextError.message : String(nextError)}\r\n`,
-        );
-      });
 
     const nextCached = { terminal, fit };
     terminalCacheRef.current.set(terminalId, nextCached);
@@ -1030,8 +1060,11 @@ export default function App() {
         activeAgentTerminalId,
         activeSession.worktreePath,
         agentCommand,
+        cached?.terminal.cols,
+        cached?.terminal.rows,
       )
       .then(() => {
+        startedTerminalIdsRef.current.add(activeAgentTerminalId);
         setExitedTerminalIds((current) => {
           const next = new Set(current);
           next.delete(activeAgentTerminalId);

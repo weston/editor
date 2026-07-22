@@ -1222,7 +1222,13 @@ function stopSessionTerminals(sessionId: string) {
   }
 }
 
-function startTerminal(terminalId: string, cwd: string, command?: string) {
+function startTerminal(
+  terminalId: string,
+  cwd: string,
+  command?: string,
+  cols = 100,
+  rows = 30,
+) {
   if (terminalProcesses.has(terminalId)) {
     return true;
   }
@@ -1230,8 +1236,8 @@ function startTerminal(terminalId: string, cwd: string, command?: string) {
   const shell = process.env.SHELL || "/bin/zsh";
   const terminal = pty.spawn(shell, command ? ["-lc", command] : ["-l"], {
     name: "xterm-256color",
-    cols: 100,
-    rows: 30,
+    cols,
+    rows,
     cwd,
     env: terminalEnv(terminalId),
   });
@@ -1335,8 +1341,14 @@ function registerIpc() {
   );
   ipcMain.handle(
     "terminal:start",
-    async (_event, terminalId: string, cwd: string, command?: string) =>
-      startTerminal(terminalId, cwd, command),
+    async (
+      _event,
+      terminalId: string,
+      cwd: string,
+      command?: string,
+      cols?: number,
+      rows?: number,
+    ) => startTerminal(terminalId, cwd, command, cols, rows),
   );
   ipcMain.handle(
     "terminal:stdin",

@@ -42,12 +42,20 @@ const api = {
     ipcRenderer.invoke("agent:stop", sessionId) as Promise<boolean>,
   sendAgentInput: (sessionId: string, data: string) =>
     ipcRenderer.invoke("agent:stdin", sessionId, data) as Promise<boolean>,
-  startTerminal: (terminalId: string, cwd: string, command?: string) =>
+  startTerminal: (
+    terminalId: string,
+    cwd: string,
+    command?: string,
+    cols?: number,
+    rows?: number,
+  ) =>
     ipcRenderer.invoke(
       "terminal:start",
       terminalId,
       cwd,
       command,
+      cols,
+      rows,
     ) as Promise<boolean>,
   sendTerminalInput: (terminalId: string, data: string) =>
     ipcRenderer.invoke("terminal:stdin", terminalId, data) as Promise<boolean>,

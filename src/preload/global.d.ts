@@ -36,6 +36,8 @@ declare global {
         terminalId: string,
         cwd: string,
         command?: string,
+        cols?: number,
+        rows?: number,
       ) => Promise<boolean>;
       sendTerminalInput: (terminalId: string, data: string) => Promise<boolean>;
       resizeTerminal: (
