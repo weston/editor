@@ -799,7 +799,7 @@ function shellQuote(value: string) {
 }
 
 function terminalEnv(): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
@@ -807,6 +807,9 @@ function terminalEnv(): NodeJS.ProcessEnv {
     CLICOLOR_FORCE: "1",
     FORCE_COLOR: process.env.FORCE_COLOR ?? "3",
   };
+
+  delete env.NO_COLOR;
+  return env;
 }
 
 function startAgent(input: StartAgentInput) {

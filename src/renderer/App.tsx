@@ -320,7 +320,11 @@ export default function App() {
   }, [capturingShortcut]);
 
   useEffect(() => {
-    if (!activeSession || !agentContainerRef.current) {
+    if (
+      !activeSession?.worktreePath ||
+      !activeAgentTerminalId ||
+      !agentContainerRef.current
+    ) {
       detachMounted(mountedAgentRef.current);
       mountedAgentRef.current = null;
       return;
@@ -338,12 +342,17 @@ export default function App() {
       detachMounted(mountedAgentRef.current);
       mountedAgentRef.current = null;
     };
-  }, [activeAgentTerminalId, activeSession, currentProfile.command]);
+  }, [
+    activeAgentTerminalId,
+    activeSession?.worktreePath,
+    currentProfile.command,
+  ]);
 
   useEffect(() => {
     if (
       rightPaneMode !== "terminal" ||
-      !activeSession ||
+      !activeSession?.repoPath ||
+      !activeShellTerminalId ||
       !shellContainerRef.current
     ) {
       detachMounted(mountedShellRef.current);
@@ -362,7 +371,7 @@ export default function App() {
       detachMounted(mountedShellRef.current);
       mountedShellRef.current = null;
     };
-  }, [activeShellTerminalId, activeSession, rightPaneMode]);
+  }, [activeShellTerminalId, activeSession?.repoPath, rightPaneMode]);
 
   function handleTerminalEvent(event: TerminalEvent) {
     const terminal = terminalsRef.current.get(event.terminalId);
