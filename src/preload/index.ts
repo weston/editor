@@ -36,6 +36,11 @@ const api = {
     ipcRenderer.invoke("session:update", input) as Promise<SessionRecord>,
   deleteSession: (sessionId: string) =>
     ipcRenderer.invoke("session:delete", sessionId) as Promise<SessionRecord[]>,
+  retrySailbox: (sessionId: string) =>
+    ipcRenderer.invoke(
+      "session:retry-sailbox",
+      sessionId,
+    ) as Promise<SessionRecord>,
   startAgent: (input: StartAgentInput) =>
     ipcRenderer.invoke("agent:start", input) as Promise<void>,
   stopAgent: (sessionId: string) =>
@@ -87,6 +92,14 @@ const api = {
     ) => handler(payload);
     ipcRenderer.on("terminal:event", listener);
     return () => ipcRenderer.removeListener("terminal:event", listener);
+  },
+  onSessionChanged: (handler: (session: SessionRecord) => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: SessionRecord,
+    ) => handler(payload);
+    ipcRenderer.on("session:changed", listener);
+    return () => ipcRenderer.removeListener("session:changed", listener);
   },
 };
 

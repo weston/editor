@@ -29,6 +29,7 @@ declare global {
       reviveSession: (sessionId: string) => Promise<SessionRecord>;
       updateSession: (input: UpdateSessionInput) => Promise<SessionRecord>;
       deleteSession: (sessionId: string) => Promise<SessionRecord[]>;
+      retrySailbox: (sessionId: string) => Promise<SessionRecord>;
       startAgent: (input: StartAgentInput) => Promise<void>;
       stopAgent: (sessionId: string) => Promise<boolean>;
       sendAgentInput: (sessionId: string, data: string) => Promise<boolean>;
@@ -51,6 +52,9 @@ declare global {
       refreshGraphitePrs: (sessionId: string) => Promise<string[]>;
       onAgentEvent: (handler: (event: AgentEvent) => void) => () => void;
       onTerminalEvent: (handler: (event: TerminalEvent) => void) => () => void;
+      onSessionChanged: (
+        handler: (session: SessionRecord) => void,
+      ) => () => void;
     };
   }
 }

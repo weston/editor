@@ -225,6 +225,7 @@ export default function App() {
     }
     return ids;
   }, [workingAgentIds]);
+  const activeSailboxState = sailboxState(activeSession);
   const activeAgentTerminalId = activeSession
     ? agentTerminalId(activeSession.id, profile)
     : "";
@@ -377,6 +378,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    return window.agentEditor.onSessionChanged((updated) => {
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === updated.id
+            ? { ...session, sailbox: updated.sailbox }
+            : session,
+        ),
+      );
+    });
+  }, []);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (capturingShortcut) {
         const shortcut = shortcutFromEvent(event);
@@ -414,6 +427,7 @@ export default function App() {
     if (
       !activeSession?.worktreePath ||
       !activeAgentTerminalId ||
+      activeSailboxState !== "ready" ||
       !agentContainerRef.current
     ) {
       detachMounted(mountedAgentRef.current);
@@ -433,13 +447,19 @@ export default function App() {
       detachMounted(mountedAgentRef.current);
       mountedAgentRef.current = null;
     };
-  }, [activeAgentTerminalId, activeSession?.worktreePath, agentCommand]);
+  }, [
+    activeAgentTerminalId,
+    activeSession?.worktreePath,
+    agentCommand,
+    activeSailboxState,
+  ]);
 
   useEffect(() => {
     if (
       rightPaneMode !== "terminal" ||
       !activeSession?.repoPath ||
       !activeShellTerminalId ||
+      activeSailboxState !== "ready" ||
       !shellContainerRef.current
     ) {
       detachMounted(mountedShellRef.current);
@@ -464,6 +484,7 @@ export default function App() {
     activeSession?.repoPath,
     rightPaneMode,
     shellCommand,
+    activeSailboxState,
   ]);
 
   function handleTerminalEvent(event: TerminalEvent) {
@@ -1000,6 +1021,25 @@ export default function App() {
         await window.agentEditor.inspectRepo(revivedSession.worktreePath),
       );
       setShowArchived(false);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
+  }
+
+  async function retrySailbox(session: SessionRecord) {
+    setError("");
+
+    try {
+      const updatedSession = await window.agentEditor.retrySailbox(session.id);
+      setSessions((current) =>
+        current.map((item) =>
+          item.id === session.id
+            ? { ...item, sailbox: updatedSession.sailbox }
+            : item,
+        ),
+      );
     } catch (nextError) {
       setError(
         nextError instanceof Error ? nextError.message : String(nextError),
@@ -1621,7 +1661,8 @@ export default function App() {
                   >
                     <span className="session-title">
                       <span className="session-name">{session.name}</span>
-                      {workingSessionIds.has(session.id) ? (
+                      {workingSessionIds.has(session.id) ||
+                      sailboxState(session) === "provisioning" ? (
                         <span className="status-dots" aria-hidden="true">
                           <i />
                           <i />
@@ -1891,7 +1932,35 @@ export default function App() {
                 ) : null}
               </div>
             </div>
-            <div className="xterm-host" ref={agentContainerRef} />
+            {activeSailboxState === "ready" ? (
+              <div className="xterm-host" ref={agentContainerRef} />
+            ) : (
+              <div className="pane-status">
+                {activeSailboxState === "error" ? (
+                  <>
+                    <p>Sailbox failed to start</p>
+                    <small>{activeSession?.sailbox?.error}</small>
+                    <button
+                      onClick={() => {
+                        if (activeSession) {
+                          retrySailbox(activeSession);
+                        }
+                      }}
+                    >
+                      Retry
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="pane-spinner" aria-hidden="true" />
+                    <p>Starting sailbox…</p>
+                    <small>
+                      The agent will start automatically once the box is up.
+                    </small>
+                  </>
+                )}
+              </div>
+            )}
           </section>
 
           <div className="panel-divider" onPointerDown={beginPanelResize} />
@@ -1964,7 +2033,20 @@ export default function App() {
               </div>
             </div>
             {rightPaneMode === "terminal" ? (
-              <div className="xterm-host" ref={shellContainerRef} />
+              activeSailboxState === "ready" ? (
+                <div className="xterm-host" ref={shellContainerRef} />
+              ) : (
+                <div className="pane-status">
+                  {activeSailboxState === "error" ? (
+                    <p>Sailbox failed to start</p>
+                  ) : (
+                    <>
+                      <span className="pane-spinner" aria-hidden="true" />
+                      <p>Starting sailbox…</p>
+                    </>
+                  )}
+                </div>
+              )
             ) : (
               <textarea
                 className="notes-editor"
@@ -2147,6 +2229,27 @@ function sessionItemClassName(
   }
 
   return classNames.join(" ");
+}
+
+function sailboxState(
+  session: SessionRecord | undefined,
+): "ready" | "provisioning" | "error" {
+  if (!session || session.target !== "sailbox") {
+    return "ready";
+  }
+
+  const sailbox = session.sailbox;
+  if (sailbox?.status === "error") {
+    return "error";
+  }
+
+  // Sessions from before provisioning states existed have no status; treat
+  // them as ready when the box details are present.
+  if (sailbox?.id && sailbox.workdir && sailbox.status !== "provisioning") {
+    return "ready";
+  }
+
+  return "provisioning";
 }
 
 function sessionMatchesSearch(session: SessionRecord, tokens: string[]) {

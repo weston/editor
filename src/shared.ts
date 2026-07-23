@@ -28,6 +28,8 @@ export type SessionRecord = {
     name?: string;
     id?: string;
     workdir?: string;
+    status?: "provisioning" | "ready" | "error";
+    error?: string;
   };
   createdAt: number;
   updatedAt: number;

@@ -902,6 +902,58 @@ textarea {
   padding: 10px;
 }
 
+.pane-status {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.pane-status p {
+  margin: 0;
+  color: #d6d6d6;
+  font-size: 13px;
+}
+
+.pane-status small {
+  max-width: 380px;
+  color: #8a8a8a;
+  overflow-wrap: anywhere;
+}
+
+.pane-status button {
+  padding: 6px 14px;
+  border: 1px solid #2d2d2d;
+  border-radius: 7px;
+  background: #1d1d1d;
+  color: #ececec;
+  transition: background 120ms ease;
+}
+
+.pane-status button:hover {
+  background: #242424;
+}
+
+.pane-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #333333;
+  border-top-color: #d6d6d6;
+  border-radius: 50%;
+  animation: pane-spin 0.9s linear infinite;
+}
+
+@keyframes pane-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .notes-editor {
   min-width: 0;
   min-height: 0;

@@ -203,12 +203,13 @@ function execFileText(
   args: string[],
   cwd: string,
   maxBuffer = 1024 * 1024,
+  timeout = 20_000,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       command,
       args,
-      { cwd, maxBuffer, timeout: 20_000, env: execEnv() },
+      { cwd, maxBuffer, timeout, env: execEnv() },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(stderr.trim() || error.message));
@@ -225,6 +226,8 @@ async function createSailbox(app: string, name: string, cwd: string) {
     "sail",
     ["--json", "box", "create", "--app", app, "--name", name],
     cwd,
+    1024 * 1024,
+    180_000,
   );
   const parsed = JSON.parse(raw) as { sailbox_id?: string };
 
@@ -233,6 +236,84 @@ async function createSailbox(app: string, name: string, cwd: string) {
   }
 
   return parsed.sailbox_id;
+}
+
+async function updateSessionSailbox(
+  sessionId: string,
+  sailbox: NonNullable<SessionRecord["sailbox"]>,
+): Promise<SessionRecord | undefined> {
+  const state = await readState();
+  let updated: SessionRecord | undefined;
+  const sessions = state.sessions.map((session) => {
+    if (session.id !== sessionId) {
+      return session;
+    }
+
+    updated = { ...session, sailbox, updatedAt: Date.now() };
+    return updated;
+  });
+
+  if (!updated) {
+    return undefined;
+  }
+
+  await writeState({ ...state, sessions });
+  sendRendererEvent("session:changed", updated);
+  return updated;
+}
+
+async function provisionSailbox(sessionId: string) {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  const sailbox = session?.sailbox;
+  if (!session || session.target !== "sailbox" || !sailbox?.workdir) {
+    return;
+  }
+
+  try {
+    let sailboxId = sailbox.id;
+    if (!sailboxId) {
+      sailboxId = await createSailbox(
+        sailbox.app || slugify(path.basename(session.repoPath)),
+        sailbox.name || slugify(session.name),
+        session.repoPath,
+      );
+      // Persist the id before the sync so a restart resumes instead of
+      // creating a second box.
+      await updateSessionSailbox(sessionId, { ...sailbox, id: sailboxId });
+    }
+
+    await syncWorktreeToSailbox(
+      sailboxId,
+      session.worktreePath,
+      sailbox.workdir,
+    );
+    await updateSessionSailbox(sessionId, {
+      ...sailbox,
+      id: sailboxId,
+      status: "ready",
+      error: undefined,
+    });
+  } catch (error) {
+    await updateSessionSailbox(sessionId, {
+      ...sailbox,
+      status: "error",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function resumePendingSailboxes() {
+  const state = await readState();
+  for (const session of state.sessions) {
+    if (
+      session.target === "sailbox" &&
+      session.sailbox?.status === "provisioning" &&
+      !session.archived
+    ) {
+      void provisionSailbox(session.id);
+    }
+  }
 }
 
 async function syncWorktreeToSailbox(
@@ -355,12 +436,9 @@ async function createSessionFrom(
   };
   const sailboxApp = input.sailbox?.app?.trim() || repoSlug;
   const sailboxName = input.sailbox?.name?.trim() || slug;
-  const sailboxId =
-    input.target === "sailbox"
-      ? input.sailbox?.id?.trim() ||
-        (await createSailbox(sailboxApp, sailboxName, snapshot.rootPath))
-      : undefined;
-  const sailboxWorkdir = sailboxId ? `/workspace/editor/${slug}` : undefined;
+  const sailboxId = input.sailbox?.id?.trim() || undefined;
+  const sailboxWorkdir =
+    input.target === "sailbox" ? `/workspace/editor/${slug}` : undefined;
 
   await mkdir(path.dirname(worktreePath), { recursive: true });
 
@@ -399,6 +477,7 @@ async function createSessionFrom(
             name: sailboxName,
             id: sailboxId,
             workdir: sailboxWorkdir,
+            status: "provisioning",
           }
         : undefined,
     createdAt: now,
@@ -408,10 +487,6 @@ async function createSessionFrom(
   if (sourceSession) {
     await copyWorktreeChanges(sourceSession.worktreePath, worktreePath, slug);
     await forkClaudeSession(sourceSession, session);
-  }
-
-  if (sailboxId && sailboxWorkdir) {
-    await syncWorktreeToSailbox(sailboxId, worktreePath, sailboxWorkdir);
   }
 
   if (sourceSession?.agentSessions?.claude) {
@@ -438,6 +513,10 @@ async function createSessionFrom(
     ...rememberRepo(state, snapshot.rootPath),
     sessions: [session, ...existingSessions],
   });
+
+  if (session.target === "sailbox") {
+    void provisionSailbox(session.id);
+  }
 
   return session;
 }
@@ -1344,6 +1423,21 @@ function registerIpc() {
   ipcMain.handle("session:update", async (_event, input: UpdateSessionInput) =>
     updateSession(input),
   );
+  ipcMain.handle("session:retry-sailbox", async (_event, sessionId: string) => {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === sessionId);
+    if (!session?.sailbox) {
+      throw new Error("session not found");
+    }
+
+    const updated = await updateSessionSailbox(sessionId, {
+      ...session.sailbox,
+      status: "provisioning",
+      error: undefined,
+    });
+    void provisionSailbox(sessionId);
+    return updated;
+  });
   ipcMain.handle("session:delete", async (_event, sessionId: string) =>
     deleteSession(sessionId),
   );
@@ -1422,6 +1516,7 @@ app.whenReady().then(async () => {
   await ensureEditorTools();
   registerIpc();
   await createWindow();
+  void resumePendingSailboxes();
 
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
