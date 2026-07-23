@@ -787,9 +787,40 @@ textarea {
   gap: 5px;
   padding: 0 9px;
   border-radius: 7px;
+  background: transparent;
+  color: #a6a6a6;
+  font-size: 12px;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.pr-link:hover {
   background: #242424;
   color: #ececec;
-  font-size: 12px;
+}
+
+.pr-link.lit {
+  background: #242424;
+  color: #ececec;
+}
+
+.pr-link.lit.graphite svg {
+  color: #93d976;
+  filter: drop-shadow(0 0 4px rgba(147, 217, 118, 0.45));
+}
+
+.pr-link.lit.linear svg {
+  color: #8b95f6;
+  filter: drop-shadow(0 0 4px rgba(139, 149, 246, 0.45));
+}
+
+.pr-count {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #333333;
+  color: #d6d6d6;
+  font-size: 10px;
 }
 
 .shortcut-menu,

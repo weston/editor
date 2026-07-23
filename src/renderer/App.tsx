@@ -1791,7 +1791,11 @@ export default function App() {
           </div>
           <div className="topbar-actions" ref={topbarActionsRef}>
             {activeSession?.linearIssue ? (
-              <button className="pr-link" onClick={openLinearUrl}>
+              <button
+                className="pr-link lit linear"
+                onClick={openLinearUrl}
+                data-tooltip="Open in Linear"
+              >
                 {activeSession.linearIssue.identifier}
                 <ExternalLink size={13} />
               </button>
@@ -1800,15 +1804,39 @@ export default function App() {
               <button
                 className="pr-link"
                 onClick={() => syncLinear(activeSession)}
+                data-tooltip={
+                  activeSession.linearIssue
+                    ? "Re-sync Linear issue"
+                    : "Link a Linear issue"
+                }
               >
                 <Link2 size={13} />
                 Linear
               </button>
             ) : null}
             {activeSession && !activeSession.archived ? (
-              <button className="pr-link" onClick={openOrRefreshGraphite}>
+              <button
+                className={
+                  activeGraphitePrUrls.length
+                    ? "pr-link lit graphite"
+                    : "pr-link"
+                }
+                onClick={openOrRefreshGraphite}
+                data-tooltip={
+                  activeGraphitePrUrls.length === 1
+                    ? "Open PR in Graphite"
+                    : activeGraphitePrUrls.length > 1
+                      ? `${activeGraphitePrUrls.length} PRs — choose one`
+                      : "Detect PRs"
+                }
+              >
                 <GitPullRequest size={13} />
                 Graphite
+                {activeGraphitePrUrls.length > 1 ? (
+                  <span className="pr-count">
+                    {activeGraphitePrUrls.length}
+                  </span>
+                ) : null}
               </button>
             ) : null}
             <div className="transfer-actions">
