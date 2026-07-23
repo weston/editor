@@ -88,11 +88,6 @@ type CachedTerminal = {
 type ShortcutTarget = "sidebar" | "agent" | "terminal" | "search";
 type Shortcuts = Record<ShortcutTarget, string>;
 type RightPaneMode = "terminal" | "notes";
-type CloseOptions = {
-  linear: boolean;
-  git: boolean;
-  archive: boolean;
-};
 type NotesState = {
   notes: string;
   notesUndoStack: string[];
@@ -116,11 +111,6 @@ export default function App() {
   const [forkSessionName, setForkSessionName] = useState("");
   const [confirmingDeleteId, setConfirmingDeleteId] = useState("");
   const [closingSessionId, setClosingSessionId] = useState("");
-  const [closeOptions, setCloseOptions] = useState<CloseOptions>({
-    linear: true,
-    git: true,
-    archive: true,
-  });
   const [showArchived, setShowArchived] = useState(false);
   const [sessionSearch, setSessionSearch] = useState("");
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("terminal");
@@ -1058,9 +1048,6 @@ export default function App() {
     try {
       const nextSessions = await window.agentEditor.closeSession({
         id: session.id,
-        completeLinear: closeOptions.linear,
-        cleanupGit: closeOptions.git,
-        archive: closeOptions.archive,
       });
       setSessions(nextSessions);
       setClosingSessionId("");
@@ -1662,65 +1649,6 @@ export default function App() {
                     <X size={14} />
                   </button>
                 </div>
-              ) : closingSessionId === session.id ? (
-                <div className="close-confirm">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={closeOptions.linear}
-                      onChange={(event) =>
-                        setCloseOptions((current) => ({
-                          ...current,
-                          linear: event.target.checked,
-                        }))
-                      }
-                      disabled={!session.linearIssue}
-                    />
-                    Linear
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={closeOptions.git}
-                      onChange={(event) =>
-                        setCloseOptions((current) => ({
-                          ...current,
-                          git: event.target.checked,
-                        }))
-                      }
-                    />
-                    Git
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={closeOptions.archive}
-                      onChange={(event) =>
-                        setCloseOptions((current) => ({
-                          ...current,
-                          archive: event.target.checked,
-                        }))
-                      }
-                    />
-                    Archive
-                  </label>
-                  <button
-                    onClick={() => closeSession(session)}
-                    data-tooltip="Confirm close"
-                    aria-label="Confirm close"
-                  >
-                    <Check size={14} />
-                  </button>
-                  <button
-                    onClick={() => {
-                      setClosingSessionId("");
-                    }}
-                    data-tooltip="Cancel"
-                    aria-label="Cancel"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
               ) : (
                 <>
                   <button
@@ -1746,8 +1674,8 @@ export default function App() {
                     {session.archived ? (
                       <button
                         onClick={() => reviveSession(session)}
-                        data-tooltip="Revive"
-                        aria-label="Revive"
+                        data-tooltip="Unarchive"
+                        aria-label="Unarchive"
                       >
                         <RotateCcw size={13} />
                       </button>
@@ -1790,23 +1718,37 @@ export default function App() {
                         >
                           <Pencil size={13} />
                         </button>
-                        <button
-                          onClick={() => {
-                            setClosingSessionId(session.id);
-                            setCloseOptions({
-                              linear: Boolean(session.linearIssue),
-                              git: true,
-                              archive: true,
-                            });
-                            setEditingSessionId("");
-                            setForkingSessionId("");
-                            setConfirmingDeleteId("");
-                          }}
-                          data-tooltip="Close"
-                          aria-label="Close"
-                        >
-                          <Archive size={13} />
-                        </button>
+                        {closingSessionId === session.id ? (
+                          <>
+                            <button
+                              onClick={() => closeSession(session)}
+                              data-tooltip="Confirm archive"
+                              aria-label="Confirm archive"
+                            >
+                              <Check size={13} />
+                            </button>
+                            <button
+                              onClick={() => setClosingSessionId("")}
+                              data-tooltip="Cancel"
+                              aria-label="Cancel"
+                            >
+                              <X size={13} />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setClosingSessionId(session.id);
+                              setEditingSessionId("");
+                              setForkingSessionId("");
+                              setConfirmingDeleteId("");
+                            }}
+                            data-tooltip="Archive"
+                            aria-label="Archive"
+                          >
+                            <Archive size={13} />
+                          </button>
+                        )}
                         {confirmingDeleteId === session.id ? (
                           <>
                             <button

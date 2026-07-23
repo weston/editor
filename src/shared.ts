@@ -94,9 +94,6 @@ export type LinearIssue = {
 
 export type CloseSessionInput = {
   id: string;
-  completeLinear: boolean;
-  cleanupGit: boolean;
-  archive: boolean;
 };
 
 export type StartAgentInput = {

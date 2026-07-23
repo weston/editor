@@ -744,34 +744,18 @@ async function closeSession(
   stopAgent(session.id);
   stopSessionTerminals(session.id);
 
-  if (input.completeLinear && session.linearIssue) {
-    await completeLinearIssue(session.linearIssue.id);
-  }
-
   const archivedRef = await execGit(session.worktreePath, [
     "rev-parse",
     "HEAD",
   ]).catch(() => session.archivedRef);
-
-  if (input.cleanupGit) {
-    await execGit(session.repoPath, [
-      "worktree",
-      "remove",
-      "--force",
-      session.worktreePath,
-    ]).catch(() => undefined);
-    await execGit(session.repoPath, ["branch", "-D", session.branch]).catch(
-      () => undefined,
-    );
-  }
 
   const now = Date.now();
   const sessions = state.sessions.map((item) =>
     item.id === session.id
       ? {
           ...item,
-          archived: input.archive,
-          archivedAt: input.archive ? now : undefined,
+          archived: true,
+          archivedAt: now,
           archivedRef,
           updatedAt: now,
         }
@@ -791,18 +775,23 @@ async function reviveSession(sessionId: string): Promise<SessionRecord> {
   const now = Date.now();
   const worktreePath = session.worktreePath;
   const ref = session.archivedRef || "HEAD";
+  const worktreeExists = await stat(worktreePath)
+    .then(() => true)
+    .catch(() => false);
 
-  await mkdir(path.dirname(worktreePath), { recursive: true });
-  await execGit(session.repoPath, [
-    "worktree",
-    "add",
-    "-b",
-    session.branch,
-    worktreePath,
-    ref,
-  ]).catch(async () => {
-    await execGit(session.repoPath, ["worktree", "add", worktreePath, ref]);
-  });
+  if (!worktreeExists) {
+    await mkdir(path.dirname(worktreePath), { recursive: true });
+    await execGit(session.repoPath, [
+      "worktree",
+      "add",
+      "-b",
+      session.branch,
+      worktreePath,
+      ref,
+    ]).catch(async () => {
+      await execGit(session.repoPath, ["worktree", "add", worktreePath, ref]);
+    });
+  }
 
   const updatedSession = {
     ...session,
@@ -994,42 +983,6 @@ async function createLinearIssue(session: SessionRecord): Promise<LinearIssue> {
   );
 
   return linearIssueFromResponse(data.issueCreate.issue);
-}
-
-async function completeLinearIssue(issueId: string) {
-  const data = await linearRequest<{
-    issue?: {
-      team?: {
-        states?: {
-          nodes: Array<{ id: string; name: string; type?: string }>;
-        };
-      };
-    } | null;
-  }>(
-    `query IssueStates($id: String!) {
-      issue(id: $id) {
-        team {
-          states {
-            nodes { id name type }
-          }
-        }
-      }
-    }`,
-    { id: issueId },
-  );
-  const state = data.issue?.team?.states?.nodes.find(
-    (item) => item.type === "completed" || item.name.toLowerCase() === "done",
-  );
-  if (!state) {
-    throw new Error("Linear completed state not found");
-  }
-
-  await linearRequest(
-    `mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
-      issueUpdate(id: $id, input: $input) { success }
-    }`,
-    { id: issueId, input: { stateId: state.id } },
-  );
 }
 
 async function linearTeamId() {
