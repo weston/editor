@@ -242,17 +242,6 @@ textarea {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.sailbox-fields {
-  display: grid;
-  gap: 6px;
-}
-
-.sailbox-create-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
-}
-
 .repo-list button {
   display: grid;
   gap: 2px;

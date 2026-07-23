@@ -220,29 +220,10 @@ function execFileText(
   });
 }
 
-async function createSailbox(
-  input: NonNullable<CreateSessionInput["sailbox"]>,
-  cwd: string,
-) {
-  if (input.id?.trim()) {
-    return input.id.trim();
-  }
-
-  if (!input.app?.trim() || !input.name?.trim()) {
-    throw new Error("missing Sailbox app or name");
-  }
-
+async function createSailbox(app: string, name: string, cwd: string) {
   const raw = await execFileText(
     "sail",
-    [
-      "--json",
-      "box",
-      "create",
-      "--app",
-      input.app.trim(),
-      "--name",
-      input.name.trim(),
-    ],
+    ["--json", "box", "create", "--app", app, "--name", name],
     cwd,
   );
   const parsed = JSON.parse(raw) as { sailbox_id?: string };
@@ -372,9 +353,12 @@ async function createSessionFrom(
   const agentSessions: SessionRecord["agentSessions"] = {
     claude: randomUUID(),
   };
+  const sailboxApp = input.sailbox?.app?.trim() || repoSlug;
+  const sailboxName = input.sailbox?.name?.trim() || slug;
   const sailboxId =
     input.target === "sailbox"
-      ? await createSailbox(input.sailbox ?? {}, snapshot.rootPath)
+      ? input.sailbox?.id?.trim() ||
+        (await createSailbox(sailboxApp, sailboxName, snapshot.rootPath))
       : undefined;
   const sailboxWorkdir = sailboxId ? `/workspace/editor/${slug}` : undefined;
 
@@ -411,8 +395,8 @@ async function createSessionFrom(
     sailbox:
       input.target === "sailbox"
         ? {
-            app: input.sailbox?.app?.trim() || undefined,
-            name: input.sailbox?.name?.trim() || undefined,
+            app: sailboxApp,
+            name: sailboxName,
             id: sailboxId,
             workdir: sailboxWorkdir,
           }

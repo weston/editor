@@ -110,9 +110,6 @@ export default function App() {
   const [creatingSession, setCreatingSession] = useState(false);
   const [newSessionTarget, setNewSessionTarget] =
     useState<RuntimeTarget>("local");
-  const [newSailboxId, setNewSailboxId] = useState("");
-  const [newSailboxApp, setNewSailboxApp] = useState("");
-  const [newSailboxName, setNewSailboxName] = useState("");
   const [editingSessionId, setEditingSessionId] = useState("");
   const [editingSessionName, setEditingSessionName] = useState("");
   const [forkingSessionId, setForkingSessionId] = useState("");
@@ -823,22 +820,12 @@ export default function App() {
         repoPath,
         name,
         target: newSessionTarget,
-        sailbox:
-          newSessionTarget === "sailbox"
-            ? {
-                id: newSailboxId,
-                app: newSailboxApp,
-                name: newSailboxName || name,
-              }
-            : undefined,
       });
       setSessions((current) => [session, ...current]);
       setActiveSessionId(session.id);
       setRepo(await window.agentEditor.inspectRepo(session.worktreePath));
       rememberRecentRepo(session.repoPath);
       setSessionName("");
-      setNewSailboxId("");
-      setNewSailboxName("");
       setShowNewSession(false);
     } catch (nextError) {
       setError(
@@ -1464,30 +1451,6 @@ export default function App() {
                 Sailbox
               </button>
             </div>
-            {newSessionTarget === "sailbox" ? (
-              <div className="sailbox-fields">
-                <input
-                  value={newSailboxId}
-                  onChange={(event) => setNewSailboxId(event.target.value)}
-                  placeholder="Sailbox ID"
-                  disabled={creatingSession}
-                />
-                <div className="sailbox-create-fields">
-                  <input
-                    value={newSailboxApp}
-                    onChange={(event) => setNewSailboxApp(event.target.value)}
-                    placeholder="App"
-                    disabled={creatingSession}
-                  />
-                  <input
-                    value={newSailboxName}
-                    onChange={(event) => setNewSailboxName(event.target.value)}
-                    placeholder="Sailbox name"
-                    disabled={creatingSession}
-                  />
-                </div>
-              </div>
-            ) : null}
             <div className="repo-list">
               {recentRepoPaths.map((repoPath) => (
                 <button
