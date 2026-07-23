@@ -759,23 +759,26 @@ export default function App() {
     terminalId: string,
     terminal: Terminal,
   ) {
-    if (event.type !== "keydown") {
-      return true;
-    }
-
     if (
       event.key === "Enter" &&
       event.shiftKey &&
       !event.metaKey &&
       !event.ctrlKey &&
-      !event.altKey &&
-      terminalId.startsWith("agent:")
+      !event.altKey
     ) {
-      recordAgentInput(terminalId, "\r");
-      window.agentEditor
-        .sendTerminalInput(terminalId, "\u001b\r")
-        .catch(() => undefined);
+      // Swallow keypress/keyup too: xterm resends a bare CR on the Enter
+      // keypress, which would submit right after the inserted newline.
+      if (event.type === "keydown") {
+        recordAgentInput(terminalId, "\r");
+        window.agentEditor
+          .sendTerminalInput(terminalId, "\u001b\r")
+          .catch(() => undefined);
+      }
       return false;
+    }
+
+    if (event.type !== "keydown") {
+      return true;
     }
 
     if (event.metaKey && normalizeKey(event.key) === "C") {
