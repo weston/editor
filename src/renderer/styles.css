@@ -296,6 +296,53 @@ textarea {
   color: #ececec;
 }
 
+.session-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.session-search .search-icon {
+  position: absolute;
+  left: 10px;
+  color: #7a7a7a;
+  pointer-events: none;
+}
+
+.session-search input {
+  height: 30px;
+  padding-left: 30px;
+  padding-right: 28px;
+}
+
+.search-clear {
+  position: absolute;
+  right: 5px;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 5px;
+  color: #9b9b9b;
+  background: transparent;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.search-clear:hover {
+  background: #242424;
+  color: #ececec;
+}
+
+.session-search-empty {
+  margin: 0;
+  padding: 14px 10px;
+  color: #8a8a8a;
+  font-size: 12px;
+  text-align: center;
+}
+
 .session-list {
   display: flex;
   min-height: 0;

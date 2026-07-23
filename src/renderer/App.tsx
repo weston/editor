@@ -18,6 +18,7 @@ import {
   Plus,
   RotateCcw,
   Redo2,
+  Search,
   SquareTerminal,
   Trash2,
   Undo2,
@@ -60,6 +61,7 @@ const defaultShortcuts: Shortcuts = {
   sidebar: "Meta+1",
   agent: "Meta+2",
   terminal: "Meta+3",
+  search: "Meta+F",
 };
 
 const shortcutStorageKey = "agent-editor:shortcuts";
@@ -83,7 +85,7 @@ type CachedTerminal = {
   fit: FitAddon;
 };
 
-type ShortcutTarget = "sidebar" | "agent" | "terminal";
+type ShortcutTarget = "sidebar" | "agent" | "terminal" | "search";
 type Shortcuts = Record<ShortcutTarget, string>;
 type RightPaneMode = "terminal" | "notes";
 type CloseOptions = {
@@ -123,6 +125,7 @@ export default function App() {
     archive: true,
   });
   const [showArchived, setShowArchived] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState("");
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("terminal");
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showPrMenu, setShowPrMenu] = useState(false);
@@ -142,6 +145,7 @@ export default function App() {
   const [splitPercent, setSplitPercent] = useState(loadSplitPercent);
   const [error, setError] = useState("");
   const sidebarRef = useRef<HTMLElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const topbarActionsRef = useRef<HTMLDivElement>(null);
   const workspaceGridRef = useRef<HTMLDivElement>(null);
   const terminalPanelRef = useRef<HTMLElement>(null);
@@ -180,13 +184,18 @@ export default function App() {
       }),
     [sessions],
   );
-  const visibleSessions = useMemo(
-    () =>
-      orderedSessions.filter((session) =>
-        showArchived ? session.archived : !session.archived,
-      ),
-    [orderedSessions, showArchived],
-  );
+  const normalizedSearch = sessionSearch.trim().toLowerCase();
+  const visibleSessions = useMemo(() => {
+    const inView = orderedSessions.filter((session) =>
+      showArchived ? session.archived : !session.archived,
+    );
+    if (!normalizedSearch) {
+      return inView;
+    }
+
+    const tokens = normalizedSearch.split(/\s+/);
+    return inView.filter((session) => sessionMatchesSearch(session, tokens));
+  }, [orderedSessions, showArchived, normalizedSearch]);
   const currentProfile =
     profiles.find((item) => item.id === profile) ?? profiles[0];
   const agentCommand = activeSession
@@ -1322,6 +1331,13 @@ export default function App() {
   }
 
   function focusPanel(target: ShortcutTarget) {
+    if (target === "search") {
+      setFocusedPanel("sidebar");
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+      return;
+    }
+
     setFocusedPanel(target);
     if (target === "sidebar") {
       const element = sidebarRef.current?.querySelector<
@@ -1377,6 +1393,39 @@ export default function App() {
             <Archive size={14} />
             Archived
           </button>
+          <div className="session-search">
+            <Search size={13} className="search-icon" />
+            <input
+              ref={searchInputRef}
+              value={sessionSearch}
+              onChange={(event) => setSessionSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && visibleSessions[0]) {
+                  selectSession(visibleSessions[0]);
+                }
+                if (event.key === "Escape") {
+                  if (sessionSearch) {
+                    setSessionSearch("");
+                  } else {
+                    event.currentTarget.blur();
+                  }
+                }
+              }}
+              placeholder="Search sessions"
+            />
+            {sessionSearch ? (
+              <button
+                className="search-clear"
+                onClick={() => {
+                  setSessionSearch("");
+                  searchInputRef.current?.focus();
+                }}
+                aria-label="Clear search"
+              >
+                <X size={12} />
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {showNewSession ? (
@@ -1458,6 +1507,9 @@ export default function App() {
         ) : null}
 
         <nav className="session-list">
+          {normalizedSearch && visibleSessions.length === 0 ? (
+            <p className="session-search-empty">No matching sessions</p>
+          ) : null}
           {visibleSessions.map((session) => (
             <div
               className={sessionItemClassName(
@@ -1805,20 +1857,22 @@ export default function App() {
             </button>
             {showShortcuts ? (
               <div className="shortcut-menu">
-                {(["sidebar", "agent", "terminal"] as const).map((target) => (
-                  <button
-                    className="shortcut-row"
-                    key={target}
-                    onClick={() => updateShortcut(target)}
-                  >
-                    <span>{shortcutLabel(target)}</span>
-                    <strong>
-                      {capturingShortcut === target
-                        ? "Press keys"
-                        : displayShortcut(shortcuts[target])}
-                    </strong>
-                  </button>
-                ))}
+                {(["sidebar", "agent", "terminal", "search"] as const).map(
+                  (target) => (
+                    <button
+                      className="shortcut-row"
+                      key={target}
+                      onClick={() => updateShortcut(target)}
+                    >
+                      <span>{shortcutLabel(target)}</span>
+                      <strong>
+                        {capturingShortcut === target
+                          ? "Press keys"
+                          : displayShortcut(shortcuts[target])}
+                      </strong>
+                    </button>
+                  ),
+                )}
               </div>
             ) : null}
           </div>
@@ -2129,6 +2183,23 @@ function sessionItemClassName(
   return classNames.join(" ");
 }
 
+function sessionMatchesSearch(session: SessionRecord, tokens: string[]) {
+  const haystack = [
+    session.name,
+    session.branch,
+    session.repoPath,
+    session.notes ?? "",
+    session.linearIssue?.identifier ?? "",
+    session.linearIssue?.title ?? "",
+    session.sailbox?.name ?? "",
+    session.sailbox?.app ?? "",
+  ]
+    .join("\n")
+    .toLowerCase();
+
+  return tokens.every((token) => haystack.includes(token));
+}
+
 function sessionHasFinishedAgent(
   session: SessionRecord,
   finishedAgentIds: Set<string>,
@@ -2217,6 +2288,9 @@ function shortcutLabel(target: ShortcutTarget) {
   }
   if (target === "agent") {
     return "Agent";
+  }
+  if (target === "search") {
+    return "Search";
   }
   return "Terminal";
 }
