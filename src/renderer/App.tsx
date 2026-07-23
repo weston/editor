@@ -24,7 +24,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type {
   AgentProfile,
@@ -143,6 +143,8 @@ export default function App() {
   const [error, setError] = useState("");
   const sidebarRef = useRef<HTMLElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const sessionListRef = useRef<HTMLElement>(null);
+  const sessionTopsRef = useRef(new Map<string, number>());
   const topbarActionsRef = useRef<HTMLDivElement>(null);
   const workspaceGridRef = useRef<HTMLDivElement>(null);
   const terminalPanelRef = useRef<HTMLElement>(null);
@@ -300,6 +302,56 @@ export default function App() {
     const timer = window.setInterval(tick, 400);
     return () => window.clearInterval(timer);
   }, []);
+
+  // FLIP: whenever the sidebar order changes between renders, animate each
+  // row from its previous position to its new one.
+  useLayoutEffect(() => {
+    const list = sessionListRef.current;
+    if (!list) {
+      return;
+    }
+
+    const listTop = list.getBoundingClientRect().top;
+    const tops = new Map<string, number>();
+    for (const child of Array.from(list.children)) {
+      if (!(child instanceof HTMLElement) || !child.dataset.sessionId) {
+        continue;
+      }
+
+      tops.set(
+        child.dataset.sessionId,
+        child.getBoundingClientRect().top - listTop + list.scrollTop,
+      );
+    }
+
+    const previousTops = sessionTopsRef.current;
+    for (const child of Array.from(list.children)) {
+      if (!(child instanceof HTMLElement) || !child.dataset.sessionId) {
+        continue;
+      }
+
+      const previousTop = previousTops.get(child.dataset.sessionId);
+      const nextTop = tops.get(child.dataset.sessionId);
+      if (previousTop === undefined || nextTop === undefined) {
+        continue;
+      }
+
+      const delta = previousTop - nextTop;
+      if (Math.abs(delta) < 2) {
+        continue;
+      }
+
+      child.animate(
+        [
+          { transform: `translateY(${delta}px)` },
+          { transform: "translateY(0)" },
+        ],
+        { duration: 240, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
+      );
+    }
+
+    sessionTopsRef.current = tops;
+  });
 
   useEffect(() => {
     focusedPanelRef.current = focusedPanel;
@@ -538,11 +590,26 @@ export default function App() {
       return;
     }
 
-    if (sessionIdFromTerminalId(terminalId) === activeSessionIdRef.current) {
+    const sessionId = sessionIdFromTerminalId(terminalId);
+    if (sessionId) {
+      bumpSessionActivity(sessionId);
+    }
+
+    if (sessionId === activeSessionIdRef.current) {
       return;
     }
 
     setFinishedAgentIds((current) => new Set(current).add(terminalId));
+  }
+
+  function bumpSessionActivity(sessionId: string) {
+    const now = Date.now();
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === sessionId ? { ...session, updatedAt: now } : session,
+      ),
+    );
+    window.agentEditor.updateSession({ id: sessionId }).catch(() => undefined);
   }
 
   function mountTerminal({
@@ -1512,7 +1579,7 @@ export default function App() {
           </section>
         ) : null}
 
-        <nav className="session-list">
+        <nav className="session-list" ref={sessionListRef}>
           {normalizedSearch && visibleSessions.length === 0 ? (
             <p className="session-search-empty">No matching sessions</p>
           ) : null}
@@ -1525,6 +1592,7 @@ export default function App() {
                 workingSessionIds,
               )}
               key={session.id}
+              data-session-id={session.id}
             >
               {editingSessionId === session.id ? (
                 <div className="session-edit">
