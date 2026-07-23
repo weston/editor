@@ -845,7 +845,6 @@ async function refreshGraphitePrs(sessionId: string): Promise<string[]> {
     ...session,
     graphitePrUrl: urls[0],
     graphitePrUrls: urls,
-    updatedAt: Date.now(),
   };
   const sessions = state.sessions.map((item) =>
     item.id === session.id ? updatedSession : item,

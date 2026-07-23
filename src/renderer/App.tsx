@@ -368,6 +368,19 @@ export default function App() {
     refreshGraphitePrs();
   }, [activeSession?.id, activeSession?.archived]);
 
+  // Periodically re-run gt info for the active session so the Graphite
+  // button lights up on its own once a PR exists.
+  useEffect(() => {
+    if (!activeSession || activeSession.archived) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      refreshGraphitePrs();
+    }, 180_000);
+    return () => window.clearInterval(timer);
+  }, [activeSession?.id, activeSession?.archived]);
+
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target;
@@ -1342,12 +1355,10 @@ export default function App() {
                 ...session,
                 graphitePrUrl: urls[0],
                 graphitePrUrls: urls,
-                updatedAt: Date.now(),
               }
             : session,
         ),
       );
-      setShowPrMenu(urls.length > 1);
       return urls;
     } catch (nextError) {
       setError(
