@@ -378,20 +378,28 @@ async function inspectRepo(repoPath: string): Promise<RepoSnapshot> {
   const branch = await execGit(rootPath, ["branch", "--show-current"]).catch(
     () => "",
   );
-  const status = await execGit(rootPath, ["status", "--short", "--branch"]);
-  const diffStat = await execGit(rootPath, ["diff", "--stat"]).catch(() => "");
+  const status = await execGit(
+    rootPath,
+    ["status", "--short", "--branch"],
+    32 * 1024 * 1024,
+  ).catch(() => "");
+  const diffStat = await execGit(
+    rootPath,
+    ["diff", "--stat"],
+    8 * 1024 * 1024,
+  ).catch(() => "");
   const diff = await execGit(
     rootPath,
     ["diff", "--", "."],
-    4 * 1024 * 1024,
+    32 * 1024 * 1024,
   ).catch(() => "");
 
   return {
     repoPath,
     rootPath,
     branch,
-    status,
-    diffStat,
+    status: status.slice(0, 20_000),
+    diffStat: diffStat.slice(0, 20_000),
     diff: diff.slice(0, 240_000),
   };
 }
