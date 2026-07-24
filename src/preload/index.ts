@@ -24,6 +24,8 @@ const api = {
     ipcRenderer.invoke("repo:choose") as Promise<RepoSnapshot | null>,
   inspectRepo: (repoPath: string) =>
     ipcRenderer.invoke("repo:inspect", repoPath) as Promise<RepoSnapshot>,
+  forgetRepo: (repoPath: string) =>
+    ipcRenderer.invoke("repo:forget", repoPath) as Promise<string[]>,
   createSession: (input: CreateSessionInput) =>
     ipcRenderer.invoke("session:create", input) as Promise<SessionRecord>,
   forkSession: (input: ForkSessionInput) =>

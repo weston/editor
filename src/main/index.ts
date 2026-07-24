@@ -136,7 +136,7 @@ function rememberRepo(state: StoredState, repoPath: string): StoredState {
   const recentRepoPaths = [
     repoPath,
     ...(state.recentRepoPaths ?? []).filter((path) => path !== repoPath),
-  ].slice(0, 8);
+  ].slice(0, 20);
 
   return {
     ...state,
@@ -1360,6 +1360,19 @@ function registerIpc() {
   ipcMain.handle("repo:inspect", async (_event, repoPath: string) =>
     inspectRepo(repoPath),
   );
+  ipcMain.handle("repo:forget", async (_event, repoPath: string) => {
+    const state = await readState();
+    const recentRepoPaths = (state.recentRepoPaths ?? []).filter(
+      (path) => path !== repoPath,
+    );
+    await writeState({
+      ...state,
+      recentRepoPaths,
+      lastRepoPath:
+        state.lastRepoPath === repoPath ? undefined : state.lastRepoPath,
+    });
+    return recentRepoPaths;
+  });
   ipcMain.handle("session:create", async (_event, input: CreateSessionInput) =>
     createSession(input),
   );

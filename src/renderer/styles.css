@@ -238,6 +238,30 @@ textarea {
   gap: 4px;
 }
 
+.repo-scroll {
+  display: grid;
+  max-height: 300px;
+  gap: 4px;
+  overflow: auto;
+}
+
+.repo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.repo-list .repo-remove {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  place-items: center;
+  color: #9b9b9b;
+}
+
 .new-session-target {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

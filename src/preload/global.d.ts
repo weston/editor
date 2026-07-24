@@ -23,6 +23,7 @@ declare global {
       loadState: () => Promise<StoredState>;
       chooseRepo: () => Promise<RepoSnapshot | null>;
       inspectRepo: (repoPath: string) => Promise<RepoSnapshot>;
+      forgetRepo: (repoPath: string) => Promise<string[]>;
       createSession: (input: CreateSessionInput) => Promise<SessionRecord>;
       forkSession: (input: ForkSessionInput) => Promise<SessionRecord>;
       closeSession: (input: CloseSessionInput) => Promise<SessionRecord[]>;

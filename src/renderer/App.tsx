@@ -1185,6 +1185,13 @@ export default function App() {
     notesSaveTimersRef.current.set(sessionId, timer);
   }
 
+  function forgetRecentRepo(repoPath: string) {
+    setRecentRepoPaths((current) =>
+      current.filter((path) => path !== repoPath),
+    );
+    window.agentEditor.forgetRepo(repoPath).catch(() => undefined);
+  }
+
   function rememberRecentRepo(repoPath: string) {
     setRecentRepoPaths((current) => [
       repoPath,
@@ -1557,16 +1564,28 @@ export default function App() {
               </button>
             </div>
             <div className="repo-list">
-              {recentRepoPaths.map((repoPath) => (
-                <button
-                  key={repoPath}
-                  onClick={() => createSessionForRepo(repoPath)}
-                  disabled={creatingSession}
-                >
-                  <span>{basename(repoPath)}</span>
-                  <small>{repoPath}</small>
-                </button>
-              ))}
+              <div className="repo-scroll">
+                {recentRepoPaths.map((repoPath) => (
+                  <div className="repo-row" key={repoPath}>
+                    <button
+                      onClick={() => createSessionForRepo(repoPath)}
+                      disabled={creatingSession}
+                    >
+                      <span>{basename(repoPath)}</span>
+                      <small>{repoPath}</small>
+                    </button>
+                    <button
+                      className="repo-remove"
+                      onClick={() => forgetRecentRepo(repoPath)}
+                      disabled={creatingSession}
+                      data-tooltip="Remove from list"
+                      aria-label="Remove from list"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
               <button
                 onClick={chooseRepoForNewSession}
                 disabled={creatingSession}
