@@ -1563,6 +1563,12 @@ export default function App() {
                 Sailbox
               </button>
             </div>
+            {creatingSession ? (
+              <div className="creating-session">
+                <span className="pane-spinner" aria-hidden="true" />
+                <span>Creating session… (large repos can take a minute)</span>
+              </div>
+            ) : null}
             <div className="repo-list">
               <div className="repo-scroll">
                 {recentRepoPaths.map((repoPath) => (

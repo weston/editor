@@ -238,6 +238,22 @@ textarea {
   gap: 4px;
 }
 
+.creating-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 1px;
+  color: #a6a6a6;
+  font-size: 11px;
+}
+
+.creating-session .pane-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-width: 1.5px;
+}
+
 .repo-scroll {
   display: grid;
   max-height: 300px;

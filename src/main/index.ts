@@ -190,8 +190,15 @@ function execGit(
   cwd: string,
   args: string[],
   maxBuffer = 1024 * 1024,
+  timeout = 20_000,
 ): Promise<string> {
-  return execFileText("git", args, cwd, maxBuffer);
+  return execFileText("git", args, cwd, maxBuffer, timeout);
+}
+
+// Checking out a large repo can take minutes, and git reports progress on
+// stderr the whole time, so these need room to breathe.
+function execGitCheckout(cwd: string, args: string[]): Promise<string> {
+  return execGit(cwd, args, 32 * 1024 * 1024, 20 * 60_000);
 }
 
 function execEnv(): NodeJS.ProcessEnv {
@@ -451,18 +458,20 @@ async function createSessionFrom(
   await mkdir(path.dirname(worktreePath), { recursive: true });
 
   try {
-    await execGit(snapshot.rootPath, [
+    await execGitCheckout(snapshot.rootPath, [
       "worktree",
       "add",
+      "--quiet",
       "-b",
       branch,
       worktreePath,
       baseRef,
     ]);
   } catch (error) {
-    await execGit(snapshot.rootPath, [
+    await execGitCheckout(snapshot.rootPath, [
       "worktree",
       "add",
+      "--quiet",
       worktreePath,
       baseRef,
     ]).catch(() => {
@@ -728,7 +737,7 @@ async function deleteSession(sessionId: string): Promise<SessionRecord[]> {
   stopAgent(sessionId);
   stopSessionTerminals(sessionId);
 
-  await execGit(session.repoPath, [
+  await execGitCheckout(session.repoPath, [
     "worktree",
     "remove",
     "--force",
@@ -789,15 +798,22 @@ async function reviveSession(sessionId: string): Promise<SessionRecord> {
 
   if (!worktreeExists) {
     await mkdir(path.dirname(worktreePath), { recursive: true });
-    await execGit(session.repoPath, [
+    await execGitCheckout(session.repoPath, [
       "worktree",
       "add",
+      "--quiet",
       "-b",
       session.branch,
       worktreePath,
       ref,
     ]).catch(async () => {
-      await execGit(session.repoPath, ["worktree", "add", worktreePath, ref]);
+      await execGitCheckout(session.repoPath, [
+        "worktree",
+        "add",
+        "--quiet",
+        worktreePath,
+        ref,
+      ]);
     });
   }
 
