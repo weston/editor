@@ -10,7 +10,6 @@ import {
   FileText,
   GitFork,
   GitPullRequest,
-  Keyboard,
   Link2,
   Pencil,
   Pin,
@@ -19,6 +18,7 @@ import {
   RotateCcw,
   Redo2,
   Search,
+  Settings as SettingsIcon,
   SquareTerminal,
   Trash2,
   Undo2,
@@ -57,10 +57,21 @@ const emptySnapshot: RepoSnapshot = {
   diff: "",
 };
 
+const shortcutTargets = [
+  "cycleSessions",
+  "agent",
+  "terminal",
+  "notes",
+  "newSession",
+  "search",
+] as const;
+
 const defaultShortcuts: Shortcuts = {
-  sidebar: "Meta+1",
+  cycleSessions: "Control+Tab",
   agent: "Meta+2",
   terminal: "Meta+3",
+  notes: "Meta+4",
+  newSession: "Meta+N",
   search: "Meta+F",
 };
 
@@ -85,8 +96,9 @@ type CachedTerminal = {
   fit: FitAddon;
 };
 
-type ShortcutTarget = "sidebar" | "agent" | "terminal" | "search";
+type ShortcutTarget = (typeof shortcutTargets)[number];
 type Shortcuts = Record<ShortcutTarget, string>;
+type PanelFocus = "sidebar" | "agent" | "terminal";
 type RightPaneMode = "terminal" | "notes";
 type NotesState = {
   notes: string;
@@ -114,9 +126,9 @@ export default function App() {
   const [showArchived, setShowArchived] = useState(false);
   const [sessionSearch, setSessionSearch] = useState("");
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("terminal");
-  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showPrMenu, setShowPrMenu] = useState(false);
-  const [focusedPanel, setFocusedPanel] = useState<ShortcutTarget>("agent");
+  const [focusedPanel, setFocusedPanel] = useState<PanelFocus>("agent");
   const [exitedTerminalIds, setExitedTerminalIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -149,7 +161,8 @@ export default function App() {
   const graphiteUrlsRef = useRef(new Map<string, string[]>());
   const graphiteDetectionRef = useRef(new Set<string>());
   const shortcutsRef = useRef(shortcuts);
-  const focusedPanelRef = useRef<ShortcutTarget>("agent");
+  const focusedPanelRef = useRef<PanelFocus>("agent");
+  const visibleSessionsRef = useRef<SessionRecord[]>([]);
   const activeSessionIdRef = useRef("");
   const activeAgentTerminalIdRef = useRef("");
   const notesSaveTimersRef = useRef(new Map<string, number>());
@@ -348,6 +361,10 @@ export default function App() {
   }, [focusedPanel]);
 
   useEffect(() => {
+    visibleSessionsRef.current = visibleSessions;
+  }, [visibleSessions]);
+
+  useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
 
@@ -389,8 +406,6 @@ export default function App() {
       }
 
       if (!topbarActionsRef.current?.contains(target)) {
-        setShowShortcuts(false);
-        setCapturingShortcut(null);
         setShowPrMenu(false);
       }
     };
@@ -447,10 +462,15 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (capturingShortcut) {
-        const shortcut = shortcutFromEvent(event);
         event.preventDefault();
         event.stopPropagation();
 
+        if (event.key === "Escape") {
+          setCapturingShortcut(null);
+          return;
+        }
+
+        const shortcut = shortcutFromEvent(event);
         if (shortcut) {
           setShortcuts((current) => ({
             ...current,
@@ -461,7 +481,9 @@ export default function App() {
         return;
       }
 
-      if (isEditableTarget(event.target)) {
+      if (showSettings && event.key === "Escape") {
+        event.preventDefault();
+        setShowSettings(false);
         return;
       }
 
@@ -470,13 +492,19 @@ export default function App() {
         return;
       }
 
+      // Shortcuts with a modifier still work while typing, so you can leave
+      // the notes editor or the search box the same way you entered it.
+      if (isEditableTarget(event.target) && !hasModifier(event)) {
+        return;
+      }
+
       event.preventDefault();
-      focusPanel(target);
+      runShortcut(target);
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [capturingShortcut]);
+  }, [capturingShortcut, showSettings]);
 
   useEffect(() => {
     if (
@@ -881,7 +909,7 @@ export default function App() {
 
     const target = shortcutTargetForEvent(event, shortcutsRef.current);
     if (target) {
-      focusPanel(target);
+      runShortcut(target);
       return false;
     }
 
@@ -1383,7 +1411,6 @@ export default function App() {
       window.agentEditor.openExternal(urls[0]).catch(() => undefined);
     } else if (urls.length > 1) {
       setShowPrMenu(true);
-      setShowShortcuts(false);
     }
   }
 
@@ -1432,7 +1459,17 @@ export default function App() {
     window.addEventListener("pointerup", onPointerUp);
   }
 
-  function focusPanel(target: ShortcutTarget) {
+  function runShortcut(target: ShortcutTarget) {
+    if (target === "cycleSessions") {
+      cycleSessions();
+      return;
+    }
+
+    if (target === "newSession") {
+      setShowNewSession(true);
+      return;
+    }
+
     if (target === "search") {
       setFocusedPanel("sidebar");
       searchInputRef.current?.focus();
@@ -1440,6 +1477,32 @@ export default function App() {
       return;
     }
 
+    if (target === "notes") {
+      setRightPaneMode("notes");
+      setFocusedPanel("terminal");
+      requestAnimationFrame(() => notesEditorRef.current?.focus());
+      return;
+    }
+
+    focusPanel(target);
+  }
+
+  function cycleSessions() {
+    const sessionList = visibleSessionsRef.current;
+    if (sessionList.length === 0) {
+      return;
+    }
+
+    const index = sessionList.findIndex(
+      (session) => session.id === activeSessionIdRef.current,
+    );
+    const next = sessionList[(index + 1) % sessionList.length];
+    if (next) {
+      selectSession(next);
+    }
+  }
+
+  function focusPanel(target: PanelFocus) {
     setFocusedPanel(target);
     if (target === "sidebar") {
       const element = sidebarRef.current?.querySelector<
@@ -1447,6 +1510,10 @@ export default function App() {
       >("button, input");
       element?.focus();
       return;
+    }
+
+    if (target === "terminal") {
+      setRightPaneMode("terminal");
     }
 
     const mounted =
@@ -1463,6 +1530,16 @@ export default function App() {
 
   function updateShortcut(target: ShortcutTarget) {
     setCapturingShortcut(target);
+  }
+
+  function resetShortcuts() {
+    setShortcuts(defaultShortcuts);
+    setCapturingShortcut(null);
+  }
+
+  function closeSettings() {
+    setShowSettings(false);
+    setCapturingShortcut(null);
   }
 
   return (
@@ -1932,30 +2009,12 @@ export default function App() {
             ) : null}
             <button
               className="icon-button"
-              onClick={() => setShowShortcuts((current) => !current)}
+              onClick={() => setShowSettings(true)}
+              data-tooltip="Settings"
+              aria-label="Settings"
             >
-              <Keyboard size={16} />
+              <SettingsIcon size={16} />
             </button>
-            {showShortcuts ? (
-              <div className="shortcut-menu">
-                {(["sidebar", "agent", "terminal", "search"] as const).map(
-                  (target) => (
-                    <button
-                      className="shortcut-row"
-                      key={target}
-                      onClick={() => updateShortcut(target)}
-                    >
-                      <span>{shortcutLabel(target)}</span>
-                      <strong>
-                        {capturingShortcut === target
-                          ? "Press keys"
-                          : displayShortcut(shortcuts[target])}
-                      </strong>
-                    </button>
-                  ),
-                )}
-              </div>
-            ) : null}
           </div>
         </header>
 
@@ -2153,6 +2212,56 @@ export default function App() {
           </aside>
         </div>
       </section>
+
+      {showSettings ? (
+        <div
+          className="settings-overlay"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeSettings();
+            }
+          }}
+        >
+          <section className="settings-panel">
+            <div className="settings-head">
+              <h2>Settings</h2>
+              <button onClick={closeSettings} aria-label="Close settings">
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-head">
+                <h3>Shortcuts</h3>
+                <button className="settings-reset" onClick={resetShortcuts}>
+                  Reset to defaults
+                </button>
+              </div>
+              <p className="settings-hint">
+                Click a shortcut, then press the keys you want.
+              </p>
+              {shortcutTargets.map((target) => (
+                <button
+                  className={
+                    capturingShortcut === target
+                      ? "settings-row capturing"
+                      : "settings-row"
+                  }
+                  key={target}
+                  onClick={() => updateShortcut(target)}
+                >
+                  <span>{shortcutLabel(target)}</span>
+                  <kbd>
+                    {capturingShortcut === target
+                      ? "Press keys…"
+                      : displayShortcut(shortcuts[target])}
+                  </kbd>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -2366,10 +2475,19 @@ function stripTerminalControl(value: string) {
 
 function loadShortcuts(): Shortcuts {
   try {
-    return {
-      ...defaultShortcuts,
-      ...JSON.parse(localStorage.getItem(shortcutStorageKey) ?? "{}"),
-    };
+    const stored = JSON.parse(
+      localStorage.getItem(shortcutStorageKey) ?? "{}",
+    ) as Partial<Record<string, string>>;
+    const shortcuts = { ...defaultShortcuts };
+    // Only adopt bindings we still have an action for; older versions stored
+    // targets that no longer exist.
+    for (const target of shortcutTargets) {
+      const value = stored[target];
+      if (typeof value === "string" && value) {
+        shortcuts[target] = value;
+      }
+    }
+    return shortcuts;
   } catch {
     return defaultShortcuts;
   }
@@ -2425,17 +2543,21 @@ function displayShortcut(shortcut: string) {
     .replace("Alt", "Opt");
 }
 
+const shortcutLabels: Record<ShortcutTarget, string> = {
+  cycleSessions: "Cycle through sessions",
+  agent: "Focus agent",
+  terminal: "Focus terminal",
+  notes: "Focus notes",
+  newSession: "New session",
+  search: "Search sessions",
+};
+
 function shortcutLabel(target: ShortcutTarget) {
-  if (target === "sidebar") {
-    return "Sessions";
-  }
-  if (target === "agent") {
-    return "Agent";
-  }
-  if (target === "search") {
-    return "Search";
-  }
-  return "Terminal";
+  return shortcutLabels[target];
+}
+
+function hasModifier(event: KeyboardEvent) {
+  return event.metaKey || event.ctrlKey || event.altKey;
 }
 
 function isEditableTarget(target: EventTarget | null) {
