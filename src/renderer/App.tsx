@@ -68,14 +68,15 @@ const shortcutTargets = [
 
 const defaultShortcuts: Shortcuts = {
   cycleSessions: "Control+Tab",
-  agent: "Meta+2",
-  terminal: "Meta+3",
-  notes: "Meta+4",
-  newSession: "Meta+N",
-  search: "Meta+F",
+  agent: "Control+2",
+  terminal: "Control+3",
+  notes: "Control+4",
+  newSession: "Control+N",
+  search: "Control+F",
 };
 
-const shortcutStorageKey = "agent-editor:shortcuts";
+// Bumped when the defaults change so stored Cmd bindings do not shadow them.
+const shortcutStorageKey = "agent-editor:shortcuts:v2";
 const splitStorageKey = "agent-editor:panel-split";
 const notesDraftStorageKey = "agent-editor:note-drafts";
 const graphiteUrlPattern =
