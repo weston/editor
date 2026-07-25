@@ -68,15 +68,16 @@ const shortcutTargets = [
 
 const defaultShortcuts: Shortcuts = {
   cycleSessions: "Control+Tab",
-  agent: "Control+2",
-  terminal: "Control+3",
-  notes: "Control+4",
-  newSession: "Control+N",
-  search: "Control+F",
+  agent: "Control+1",
+  terminal: "Control+2",
+  notes: "Control+3",
+  // Shift keeps Control+N and Control+F free for readline in the terminals.
+  newSession: "Control+Shift+N",
+  search: "Control+Shift+F",
 };
 
 // Bumped when the defaults change so stored Cmd bindings do not shadow them.
-const shortcutStorageKey = "agent-editor:shortcuts:v2";
+const shortcutStorageKey = "agent-editor:shortcuts:v3";
 const splitStorageKey = "agent-editor:panel-split";
 const notesDraftStorageKey = "agent-editor:note-drafts";
 const graphiteUrlPattern =
