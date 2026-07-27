@@ -2292,6 +2292,42 @@ function basename(repoPath: string) {
   return repoPath.split(/[\\/]/).filter(Boolean).at(-1) ?? repoPath;
 }
 
+// Sailboxes start as a bare image, so agents are installed into
+// ~/.local/bin on first use and that stays on PATH for later shells.
+const sailboxPathSetup = [
+  'export PATH="$HOME/.local/bin:$PATH"',
+  `grep -qs '.local/bin' "$HOME/.profile" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"`,
+].join("\n");
+
+function sailboxAgentInstall(profile: AgentProfileId) {
+  if (profile === "claude") {
+    return [
+      "if ! command -v claude >/dev/null 2>&1; then",
+      '  echo "Installing Claude Code in this sailbox…"',
+      "  curl -fsSL https://claude.ai/install.sh | bash || exit 1",
+      "fi",
+    ].join("\n");
+  }
+
+  if (profile === "codex") {
+    // $arch is left unbraced so it survives this template literal.
+    return [
+      "if ! command -v codex >/dev/null 2>&1; then",
+      '  echo "Installing Codex in this sailbox…"',
+      '  arch="$(uname -m)"',
+      '  mkdir -p "$HOME/.local/bin"',
+      '  curl -fsSL "https://github.com/openai/codex/releases/latest/download/codex-$arch-unknown-linux-musl.tar.gz" -o /tmp/codex.tar.gz || exit 1',
+      "  tar -xzf /tmp/codex.tar.gz -C /tmp || exit 1",
+      '  mv "/tmp/codex-$arch-unknown-linux-musl" "$HOME/.local/bin/codex" || exit 1',
+      '  chmod +x "$HOME/.local/bin/codex"',
+      "  rm -f /tmp/codex.tar.gz",
+      "fi",
+    ].join("\n");
+  }
+
+  return "";
+}
+
 function commandForAgent(session: SessionRecord, profile: AgentProfile) {
   let command = profile.command;
 
@@ -2309,6 +2345,12 @@ function commandForAgent(session: SessionRecord, profile: AgentProfile) {
     command = `codex --dangerously-bypass-approvals-and-sandbox ${shellQuote(terminalAccessPrompt(session.target))}`;
   }
 
+  if (session.target === "sailbox") {
+    command = [sailboxPathSetup, sailboxAgentInstall(profile.id), command]
+      .filter(Boolean)
+      .join("\n");
+  }
+
   return wrapSailboxCommand(session, command, true);
 }
 
@@ -2317,7 +2359,11 @@ function commandForShell(session: SessionRecord) {
     return undefined;
   }
 
-  return wrapSailboxCommand(session, "/bin/bash -l", true);
+  return wrapSailboxCommand(
+    session,
+    `${sailboxPathSetup}\nexec /bin/bash -l`,
+    true,
+  );
 }
 
 function wrapSailboxCommand(
