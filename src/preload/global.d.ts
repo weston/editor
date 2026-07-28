@@ -48,6 +48,7 @@ declare global {
         rows: number,
       ) => Promise<boolean>;
       openTerminalLog: (terminalId: string) => Promise<string>;
+      saveClipboardImage: (sessionId: string) => Promise<string>;
       openExternal: (url: string) => Promise<void>;
       syncLinear: (sessionId: string) => Promise<LinearIssue>;
       refreshGraphitePrs: (sessionId: string) => Promise<string[]>;

@@ -366,6 +366,28 @@ export default function App() {
     visibleSessionsRef.current = visibleSessions;
   }, [visibleSessions]);
 
+  // Terminals can only carry text, so a pasted image lands as a file path
+  // the agent can read.
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      if (!clipboardHasImage(event.clipboardData)) {
+        return;
+      }
+
+      const terminalId = focusedTerminalId();
+      if (!terminalId) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      insertClipboardImage(terminalId);
+    };
+
+    window.addEventListener("paste", onPaste, true);
+    return () => window.removeEventListener("paste", onPaste, true);
+  }, []);
+
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -1262,6 +1284,36 @@ export default function App() {
         graphitePrUrls: nextUrls,
       })
       .catch(() => undefined);
+  }
+
+  function focusedTerminalId() {
+    if (!activeSessionIdRef.current) {
+      return "";
+    }
+
+    return focusedPanelRef.current === "terminal"
+      ? mountedShellRef.current?.id || ""
+      : mountedAgentRef.current?.id || "";
+  }
+
+  async function insertClipboardImage(terminalId: string) {
+    setError("");
+
+    try {
+      const imagePath = await window.agentEditor.saveClipboardImage(
+        activeSessionIdRef.current,
+      );
+      if (!imagePath) {
+        return;
+      }
+
+      recordAgentInput(terminalId, imagePath);
+      await window.agentEditor.sendTerminalInput(terminalId, `${imagePath} `);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
   }
 
   function copySelectionToAgent() {
@@ -2602,6 +2654,21 @@ const shortcutLabels: Record<ShortcutTarget, string> = {
 
 function shortcutLabel(target: ShortcutTarget) {
   return shortcutLabels[target];
+}
+
+function clipboardHasImage(data: DataTransfer | null) {
+  if (!data) {
+    return false;
+  }
+
+  const hasImageItem = [...data.items].some((item) =>
+    item.type.startsWith("image/"),
+  );
+  // Copying a file in Finder yields a file entry rather than an image item.
+  const hasImageFile = [...data.files].some((file) =>
+    file.type.startsWith("image/"),
+  );
+  return hasImageItem || hasImageFile;
 }
 
 function hasModifier(event: KeyboardEvent) {

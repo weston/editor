@@ -75,6 +75,8 @@ const api = {
     ) as Promise<boolean>,
   openTerminalLog: (terminalId: string) =>
     ipcRenderer.invoke("terminal:open-log", terminalId) as Promise<string>,
+  saveClipboardImage: (sessionId: string) =>
+    ipcRenderer.invoke("clipboard:save-image", sessionId) as Promise<string>,
   openExternal: (url: string) =>
     ipcRenderer.invoke("external:open", url) as Promise<void>,
   syncLinear: (sessionId: string) =>

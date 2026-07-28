@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   shell as electronShell,
@@ -24,7 +25,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import * as pty from "node-pty";
 import type {
@@ -377,6 +378,73 @@ async function syncWorktreeToSailbox(
       }
       resolve();
     });
+  });
+}
+
+// Terminals cannot carry image bytes, so a pasted image is written to a file
+// and the agent is handed the path instead.
+async function saveClipboardImage(sessionId: string): Promise<string> {
+  const image = clipboard.readImage();
+  if (image.isEmpty()) {
+    return "";
+  }
+
+  // tmpdir has no spaces, so the path can be typed unquoted.
+  const directory = path.join(tmpdir(), "editor-pastes");
+  await mkdir(directory, { recursive: true });
+  const fileName = `paste-${Date.now()}.png`;
+  const filePath = path.join(directory, fileName);
+  await writeFile(filePath, image.toPNG());
+
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  const sailboxId = session?.sailbox?.id;
+  const workdir = session?.sailbox?.workdir;
+  if (session?.target === "sailbox" && sailboxId && workdir) {
+    const remotePath = `${workdir}/.editor-pastes/${fileName}`;
+    await copyFileToSailbox(sailboxId, filePath, remotePath);
+    return remotePath;
+  }
+
+  return filePath;
+}
+
+async function copyFileToSailbox(
+  sailboxId: string,
+  localPath: string,
+  remotePath: string,
+) {
+  const contents = await readFile(localPath);
+  await new Promise<void>((resolve, reject) => {
+    const sail = spawn(
+      "sail",
+      [
+        "box",
+        "exec",
+        "--stdin",
+        sailboxId,
+        "/bin/sh",
+        "-lc",
+        `mkdir -p ${shellQuote(path.posix.dirname(remotePath))} && cat > ${shellQuote(remotePath)}`,
+      ],
+      { stdio: ["pipe", "ignore", "pipe"], env: execEnv() },
+    );
+    const stderr: Buffer[] = [];
+
+    sail.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    sail.on("error", reject);
+    sail.on("exit", (code) => {
+      if (code !== 0) {
+        reject(
+          new Error(
+            Buffer.concat(stderr).toString() || `sail box exec exited ${code}`,
+          ),
+        );
+        return;
+      }
+      resolve();
+    });
+    sail.stdin.end(contents);
   });
 }
 
@@ -1490,6 +1558,9 @@ function registerIpc() {
     await writeFile(logPath, "", { flag: "a" });
     return electronShell.openPath(logPath);
   });
+  ipcMain.handle("clipboard:save-image", async (_event, sessionId: string) =>
+    saveClipboardImage(sessionId),
+  );
   ipcMain.handle("external:open", async (_event, url: string) =>
     electronShell.openExternal(url),
   );
