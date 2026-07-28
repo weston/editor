@@ -39,7 +39,7 @@ const profiles: AgentProfile[] = [
   {
     id: "claude",
     name: "Claude",
-    command: "claude --dangerously-skip-permissions",
+    command: "claude --dangerously-skip-permissions --remote-control",
   },
   {
     id: "codex",
@@ -2334,7 +2334,7 @@ function commandForAgent(session: SessionRecord, profile: AgentProfile) {
   if (profile.id === "claude") {
     const claudeSessionId = session.agentSessions?.claude;
     if (claudeSessionId) {
-      const base = `claude --dangerously-skip-permissions --append-system-prompt ${shellQuote(terminalAccessPrompt(session.target))}`;
+      const base = `claude --dangerously-skip-permissions --remote-control ${shellQuote(session.name)} --append-system-prompt ${shellQuote(terminalAccessPrompt(session.target))}`;
       const quotedId = shellQuote(claudeSessionId);
       const transcriptName = shellQuote(`${claudeSessionId}.jsonl`);
       command = `if find "$HOME/.claude/projects" -name ${transcriptName} 2>/dev/null | grep -q .; then ${base} --resume ${quotedId}; else ${base} --session-id ${quotedId}; fi`;
