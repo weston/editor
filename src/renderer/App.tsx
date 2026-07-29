@@ -872,10 +872,13 @@ export default function App() {
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(
-      new WebLinksAddon((event, uri) => {
-        if (event.metaKey) {
-          window.agentEditor.openExternal(uri).catch(() => undefined);
+      new WebLinksAddon((_event, uri) => {
+        // Ignore the click that ends a drag-selection over a link.
+        if (terminal.hasSelection()) {
+          return;
         }
+
+        window.agentEditor.openExternal(uri).catch(() => undefined);
       }),
     );
     terminal.attachCustomKeyEventHandler((event) =>
