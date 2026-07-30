@@ -113,7 +113,6 @@ export default function App() {
   const [recentRepoPaths, setRecentRepoPaths] = useState<string[]>([]);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
-  const [profile, setProfile] = useState<AgentProfileId>("claude");
   const [showNewSession, setShowNewSession] = useState(false);
   const [sessionName, setSessionName] = useState("");
   const [creatingSession, setCreatingSession] = useState(false);
@@ -200,6 +199,8 @@ export default function App() {
     const tokens = normalizedSearch.split(/\s+/);
     return inView.filter((session) => sessionMatchesSearch(session, tokens));
   }, [orderedSessions, showArchived, normalizedSearch]);
+  // The chosen agent belongs to the session, not the window.
+  const profile = activeSession?.agentProfile ?? profiles[0].id;
   const currentProfile =
     profiles.find((item) => item.id === profile) ?? profiles[0];
   const agentCommand = activeSession
@@ -1150,6 +1151,28 @@ export default function App() {
     }
   }
 
+  function selectProfile(agentProfile: AgentProfileId) {
+    if (!activeSession || activeSession.agentProfile === agentProfile) {
+      return;
+    }
+
+    clearFinishedAgents(activeSession.id);
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === activeSession.id
+          ? { ...session, agentProfile }
+          : session,
+      ),
+    );
+    window.agentEditor
+      .updateSession({ id: activeSession.id, agentProfile })
+      .catch((nextError) => {
+        setError(
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
+      });
+  }
+
   async function retrySailbox(session: SessionRecord) {
     setError("");
 
@@ -2097,12 +2120,8 @@ export default function App() {
                   <button
                     className={item.id === profile ? "selected" : ""}
                     key={item.id}
-                    onClick={() => {
-                      setProfile(item.id);
-                      if (activeSession) {
-                        clearFinishedAgents(activeSession.id);
-                      }
-                    }}
+                    onClick={() => selectProfile(item.id)}
+                    disabled={!activeSession}
                   >
                     {item.name}
                   </button>

@@ -34,6 +34,7 @@ export type SessionRecord = {
   createdAt: number;
   updatedAt: number;
   pinned?: boolean;
+  agentProfile?: AgentProfileId;
   agentSessions?: Partial<Record<AgentProfileId, string>>;
   forkedAgentSessions?: Partial<Record<AgentProfileId, string>>;
   graphitePrUrl?: string;
@@ -120,6 +121,7 @@ export type UpdateSessionInput = {
   id: string;
   name?: string;
   pinned?: boolean;
+  agentProfile?: AgentProfileId;
   graphitePrUrl?: string | null;
   graphitePrUrls?: string[] | null;
   linearIssue?: LinearIssue | null;

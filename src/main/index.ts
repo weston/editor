@@ -554,6 +554,7 @@ async function createSessionFrom(
     repoPath: snapshot.rootPath,
     worktreePath,
     branch,
+    agentProfile: sourceSession?.agentProfile,
     agentSessions,
     sailbox:
       input.target === "sailbox"
@@ -767,6 +768,7 @@ async function updateSession(
       ...session,
       name: input.name ?? session.name,
       pinned: input.pinned ?? session.pinned,
+      agentProfile: input.agentProfile ?? session.agentProfile,
       graphitePrUrl:
         input.graphitePrUrl === undefined
           ? session.graphitePrUrl
