@@ -2351,6 +2351,9 @@ function basename(repoPath: string) {
 // ~/.local/bin on first use and that stays on PATH for later shells.
 const sailboxPathSetup = [
   'export PATH="$HOME/.local/bin:$PATH"',
+  // Sailboxes run as root, where Claude refuses to skip permissions unless
+  // it knows it is already sandboxed.
+  "export IS_SANDBOX=1",
   `grep -qs '.local/bin' "$HOME/.profile" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"`,
 ].join("\n");
 
