@@ -1714,7 +1714,7 @@ export default function App() {
         <div className="drag-zone" />
 
         <div className="sidebar-top">
-          <h1>Editor</h1>
+          <h1>Laser</h1>
         </div>
 
         <div className="sidebar-actions">
@@ -2557,10 +2557,10 @@ function wrapSailboxCommand(
 
 function terminalAccessPrompt(target: RuntimeTarget) {
   if (target === "sailbox") {
-    return "You are running inside Editor in a Sailbox workspace. The paired terminal is attached to the same Sailbox and working directory.";
+    return "You are running inside Laser in a Sailbox workspace. The paired terminal is attached to the same Sailbox and working directory.";
   }
 
-  return "You are running inside Editor. You can inspect the paired terminal for this session by running `editor-terminal lines 200` for recent terminal output, `editor-terminal commands 20` for recent commands, or `editor-terminal paths` for the backing files.";
+  return "You are running inside Laser. You can inspect the paired terminal for this session by running `laser-terminal lines 200` for recent terminal output, `laser-terminal commands 20` for recent commands, or `laser-terminal paths` for the backing files.";
 }
 
 function shellQuote(value: string) {

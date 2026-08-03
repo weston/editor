@@ -1,6 +1,6 @@
 {
   "name": "agent-editor",
-  "productName": "Editor",
+  "productName": "Laser",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.33.0",
@@ -22,8 +22,8 @@
     "format": "prettier --write ."
   },
   "build": {
-    "appId": "com.weston.editor",
-    "productName": "Editor",
+    "appId": "com.weston.laser",
+    "productName": "Laser",
     "directories": {
       "output": "release"
     },

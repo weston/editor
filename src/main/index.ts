@@ -55,7 +55,10 @@ let cachedShellPath: string | undefined;
 
 let mainWindow: BrowserWindow | null = null;
 
-app.setName("Editor");
+app.setName("Laser");
+// Sessions, worktrees and terminal logs already live under the old name, and
+// git records absolute worktree paths, so the data directory stays put.
+app.setPath("userData", path.join(app.getPath("appData"), "Editor"));
 
 const agentCommands: Record<AgentProfileId, (prompt: string) => string> = {
   codex: (prompt) => `codex exec ${shellQuote(prompt)}`,
@@ -70,7 +73,7 @@ async function createWindow() {
     height: 860,
     minWidth: 1040,
     minHeight: 700,
-    title: "Editor",
+    title: "Laser",
     titleBarStyle: "hiddenInset",
     backgroundColor: "#111318",
     webPreferences: {
@@ -115,8 +118,13 @@ function editorBinDir() {
   return path.join(app.getPath("userData"), "bin");
 }
 
-function editorTerminalHelperPath() {
-  return path.join(editorBinDir(), "editor-terminal");
+// The old name stays as an alias so agents already told about
+// editor-terminal keep working.
+function terminalHelperPaths() {
+  return [
+    path.join(editorBinDir(), "laser-terminal"),
+    path.join(editorBinDir(), "editor-terminal"),
+  ];
 }
 
 async function readState(): Promise<StoredState> {
@@ -153,9 +161,7 @@ async function writeState(state: StoredState) {
 
 async function ensureEditorTools() {
   await mkdir(editorBinDir(), { recursive: true });
-  await writeFile(
-    editorTerminalHelperPath(),
-    `#!/bin/sh
+  const helper = `#!/bin/sh
 set -eu
 command_name="\${1:-lines}"
 count="\${2:-80}"
@@ -177,14 +183,16 @@ case "$command_name" in
     printf 'EDITOR_TERMINAL_COMMANDS_PATH=%s\\n' "\${EDITOR_TERMINAL_COMMANDS_PATH:-}"
     ;;
   *)
-    printf 'usage: editor-terminal lines [count] | commands [count] | paths\\n' >&2
+    printf 'usage: laser-terminal lines [count] | commands [count] | paths\\n' >&2
     exit 2
     ;;
 esac
-`,
-    "utf8",
-  );
-  await chmod(editorTerminalHelperPath(), 0o755);
+`;
+
+  for (const helperPath of terminalHelperPaths()) {
+    await writeFile(helperPath, helper, "utf8");
+    await chmod(helperPath, 0o755);
+  }
 }
 
 function execGit(
