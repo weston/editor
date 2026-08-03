@@ -59,6 +59,7 @@ type TerminalInputState = {
 
 const terminalInputStates = new Map<string, TerminalInputState>();
 let cachedShellPath: string | undefined;
+let cachedLinearApiKey: string | undefined;
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -938,8 +939,15 @@ async function syncLinear(sessionId: string): Promise<LinearIssue> {
     throw new Error("session not found");
   }
 
-  const issue =
-    (await findLinearIssue(session)) ?? (await createLinearIssue(session));
+  const title = linearIssueTitle(session);
+  const existing = await findLinearIssue(session, title);
+  if (!existing && !title) {
+    throw new Error(
+      "Not enough context to create a Linear issue. Rename the session or add notes describing the work.",
+    );
+  }
+
+  const issue = existing ?? (await createLinearIssue(session, title as string));
   const updatedSession = {
     ...session,
     linearIssue: issue,
@@ -988,13 +996,65 @@ function parseGraphiteUrls(value: string) {
   ];
 }
 
+// Launched from Finder the app inherits no shell environment, and keys are
+// usually exported from .zshrc, which only an interactive shell reads.
+function linearApiKey() {
+  if (cachedLinearApiKey !== undefined) {
+    return cachedLinearApiKey;
+  }
+
+  cachedLinearApiKey =
+    process.env.LINEAR_API_KEY?.trim() || probeShellEnv("LINEAR_API_KEY");
+  return cachedLinearApiKey;
+}
+
+// Reads a variable the way the user's shell would. A login shell covers
+// .zprofile and .zshenv; sourcing the rc file covers keys exported from
+// .zshrc, which a login shell never reads.
+function probeShellEnv(name: string) {
+  const shell = process.env.SHELL || "/bin/zsh";
+  const print = `printf "<val>%s</val>" "$${name}"`;
+  const rcFiles = path.basename(shell).includes("bash")
+    ? ["$HOME/.bashrc", "$HOME/.bash_profile"]
+    : ["$HOME/.zshrc"];
+  const sourceRc = rcFiles
+    .map((file) => `[ -f "${file}" ] && . "${file}"`)
+    .join("; ");
+
+  const attempts = [
+    ["-lc", print],
+    // An interactive rc can hijack the shell when there is no tty, so source
+    // it non-interactively and let its interactive-only parts opt out.
+    ["-c", `{ ${sourceRc}; } >/dev/null 2>&1; ${print}`],
+  ];
+
+  for (const args of attempts) {
+    try {
+      const output = execFileSync(shell, args, {
+        timeout: 15_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).toString();
+      const value = output.match(/<val>([\s\S]*?)<\/val>/)?.[1].trim();
+      if (value) {
+        return value;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return "";
+}
+
 async function linearRequest<T>(
   query: string,
   variables: Record<string, unknown>,
 ): Promise<T> {
-  const apiKey = process.env.LINEAR_API_KEY;
+  const apiKey = linearApiKey();
   if (!apiKey) {
-    throw new Error("LINEAR_API_KEY is not set");
+    throw new Error(
+      "LINEAR_API_KEY is not set. Export it from your shell profile, then restart Laser.",
+    );
   }
 
   const response = await fetch("https://api.linear.app/graphql", {
@@ -1024,8 +1084,25 @@ async function linearRequest<T>(
   return parsed.data;
 }
 
+// A session still called "Session 12" with no notes says nothing about the
+// work, so there is nothing worth putting in an issue.
+function linearIssueTitle(session: SessionRecord): string | null {
+  const name = session.name.trim();
+  if (name.length >= 3 && !/^session\s*\d*$/i.test(name)) {
+    return name;
+  }
+
+  const noteLine = (session.notes ?? "")
+    .split("\n")
+    .map((line) => line.replace(/^[#\-*\s]+/, "").trim())
+    .find((line) => line.length >= 3);
+
+  return noteLine ? noteLine.slice(0, 120) : null;
+}
+
 async function findLinearIssue(
   session: SessionRecord,
+  title: string | null,
 ): Promise<LinearIssue | null> {
   const identifier = [session.name, session.branch, session.graphitePrUrl]
     .join(" ")
@@ -1051,7 +1128,12 @@ async function findLinearIssue(
     }
   }
 
-  const query = session.name || path.basename(session.repoPath);
+  // Without a real title a search would match some unrelated issue.
+  if (!title) {
+    return null;
+  }
+
+  const query = title;
   const data = await linearRequest<{
     issueSearch?: { nodes: LinearIssueResponse[] };
   }>(
@@ -1074,7 +1156,10 @@ async function findLinearIssue(
     : null;
 }
 
-async function createLinearIssue(session: SessionRecord): Promise<LinearIssue> {
+async function createLinearIssue(
+  session: SessionRecord,
+  title: string,
+): Promise<LinearIssue> {
   const teamId = await linearTeamId();
   const data = await linearRequest<{
     issueCreate: { issue: LinearIssueResponse };
@@ -1093,8 +1178,9 @@ async function createLinearIssue(session: SessionRecord): Promise<LinearIssue> {
     {
       input: {
         teamId,
-        title: session.name,
+        title,
         description: [
+          session.notes?.trim() ? `${session.notes.trim()}\n` : "",
           `Session: ${session.id}`,
           `Repo: ${session.repoPath}`,
           `Branch: ${session.branch}`,
