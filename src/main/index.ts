@@ -409,6 +409,22 @@ async function saveClipboardImage(sessionId: string): Promise<string> {
   return filePath;
 }
 
+// A local path means nothing inside a sailbox, so dropped files are copied
+// in and the agent is given the path they landed on.
+async function resolveSessionFile(sessionId: string, filePath: string) {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  const sailboxId = session?.sailbox?.id;
+  const workdir = session?.sailbox?.workdir;
+  if (session?.target !== "sailbox" || !sailboxId || !workdir) {
+    return filePath;
+  }
+
+  const remotePath = `${workdir}/.editor-drops/${path.basename(filePath)}`;
+  await copyFileToSailbox(sailboxId, filePath, remotePath);
+  return remotePath;
+}
+
 async function copyFileToSailbox(
   sailboxId: string,
   localPath: string,
@@ -1562,6 +1578,11 @@ function registerIpc() {
   });
   ipcMain.handle("clipboard:save-image", async (_event, sessionId: string) =>
     saveClipboardImage(sessionId),
+  );
+  ipcMain.handle(
+    "session:resolve-file",
+    async (_event, sessionId: string, filePath: string) =>
+      resolveSessionFile(sessionId, filePath),
   );
   ipcMain.handle("external:open", async (_event, url: string) =>
     electronShell.openExternal(url),

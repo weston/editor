@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   AgentEvent,
   CloseSessionInput,
@@ -77,6 +77,13 @@ const api = {
     ipcRenderer.invoke("terminal:open-log", terminalId) as Promise<string>,
   saveClipboardImage: (sessionId: string) =>
     ipcRenderer.invoke("clipboard:save-image", sessionId) as Promise<string>,
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
+  resolveDroppedFile: (sessionId: string, filePath: string) =>
+    ipcRenderer.invoke(
+      "session:resolve-file",
+      sessionId,
+      filePath,
+    ) as Promise<string>,
   openExternal: (url: string) =>
     ipcRenderer.invoke("external:open", url) as Promise<void>,
   syncLinear: (sessionId: string) =>

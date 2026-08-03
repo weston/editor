@@ -389,6 +389,37 @@ export default function App() {
     return () => window.removeEventListener("paste", onPaste, true);
   }, []);
 
+  // Dropping a file types its path, the way it works in a normal terminal.
+  // Without this the window would navigate to the dropped file.
+  useEffect(() => {
+    const onDragOver = (event: DragEvent) => {
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = dropTargetTerminalId(event)
+          ? "copy"
+          : "none";
+      }
+    };
+
+    const onDrop = (event: DragEvent) => {
+      event.preventDefault();
+      const terminalId = dropTargetTerminalId(event);
+      const files = [...(event.dataTransfer?.files ?? [])];
+      if (!terminalId || files.length === 0) {
+        return;
+      }
+
+      insertDroppedFiles(terminalId, files);
+    };
+
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
+
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -1320,6 +1351,57 @@ export default function App() {
     return focusedPanelRef.current === "terminal"
       ? mountedShellRef.current?.id || ""
       : mountedAgentRef.current?.id || "";
+  }
+
+  function dropTargetTerminalId(event: DragEvent) {
+    const target = event.target;
+    if (!(target instanceof Node)) {
+      return "";
+    }
+
+    if (agentContainerRef.current?.contains(target)) {
+      return mountedAgentRef.current?.id || "";
+    }
+
+    if (shellContainerRef.current?.contains(target)) {
+      return mountedShellRef.current?.id || "";
+    }
+
+    return "";
+  }
+
+  async function insertDroppedFiles(terminalId: string, files: File[]) {
+    setError("");
+
+    try {
+      const paths: string[] = [];
+      for (const file of files) {
+        const filePath = window.agentEditor.pathForFile(file);
+        if (!filePath) {
+          continue;
+        }
+
+        paths.push(
+          await window.agentEditor.resolveDroppedFile(
+            activeSessionIdRef.current,
+            filePath,
+          ),
+        );
+      }
+
+      if (paths.length === 0) {
+        return;
+      }
+
+      const text = `${paths.map(escapeDroppedPath).join(" ")} `;
+      recordAgentInput(terminalId, text);
+      await window.agentEditor.sendTerminalInput(terminalId, text);
+      terminalsRef.current.get(terminalId)?.focus();
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
+    }
   }
 
   async function insertClipboardImage(terminalId: string) {
@@ -2679,6 +2761,12 @@ const shortcutLabels: Record<ShortcutTarget, string> = {
 
 function shortcutLabel(target: ShortcutTarget) {
   return shortcutLabels[target];
+}
+
+// Same convention as a terminal: escape the characters a shell would
+// otherwise split on, so "Screenshot 1.png" arrives as one argument.
+function escapeDroppedPath(filePath: string) {
+  return filePath.replace(/([ \t"'\\()[\]{}$`&;|*?<>!#~])/g, "\\$1");
 }
 
 function clipboardHasImage(data: DataTransfer | null) {
