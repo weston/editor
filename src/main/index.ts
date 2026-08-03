@@ -50,7 +50,14 @@ type StoredState = {
 
 const processes = new Map<string, ChildProcessWithoutNullStreams>();
 const terminalProcesses = new Map<string, pty.IPty>();
-const terminalInputStates = new Map<string, { input: string }>();
+type TerminalInputState = {
+  input: string;
+  escape: "" | "start" | "csi" | "osc" | "ss3";
+  sequence: string;
+  pasting: boolean;
+};
+
+const terminalInputStates = new Map<string, TerminalInputState>();
 let cachedShellPath: string | undefined;
 
 let mainWindow: BrowserWindow | null = null;
@@ -1179,30 +1186,91 @@ async function appendTerminalCommand(terminalId: string, command: string) {
   );
 }
 
+// Reconstructs the command line from raw pty input. Terminals interleave
+// escape sequences with typing (focus changes, cursor keys, paste markers,
+// replies to the shell), so those have to be consumed rather than recorded.
 function recordTerminalInput(terminalId: string, data: string) {
   if (!terminalId.startsWith("shell:")) {
     return;
   }
 
-  const state = terminalInputStates.get(terminalId) ?? { input: "" };
+  const state = terminalInputStates.get(terminalId) ?? newTerminalInputState();
+
   for (const char of data) {
-    if (char === "\r") {
-      const command = state.input.trimEnd();
-      state.input = "";
-      if (command.trim()) {
-        void appendTerminalCommand(terminalId, command);
+    if (state.escape === "start") {
+      state.sequence = "";
+      state.escape =
+        char === "[" ? "csi" : char === "]" ? "osc" : char === "O" ? "ss3" : "";
+      continue;
+    }
+
+    if (state.escape === "ss3") {
+      // ESC O <final> - cursor keys in application mode.
+      state.escape = "";
+      continue;
+    }
+
+    if (state.escape === "csi") {
+      // Parameters run until a final byte in the @-~ range.
+      if (char >= "@" && char <= "~") {
+        if (state.sequence === "200") {
+          state.pasting = true;
+        } else if (state.sequence === "201") {
+          state.pasting = false;
+        }
+        state.escape = "";
+        state.sequence = "";
+      } else {
+        state.sequence += char;
       }
-    } else if (char === "\u007f") {
-      state.input = state.input.slice(0, -1);
-    } else if (char === "\u0003") {
+      continue;
+    }
+
+    if (state.escape === "osc") {
+      // Ends at BEL, or at ESC which starts the ST pair.
+      if (char === "\u0007") {
+        state.escape = "";
+      } else if (char === "\u001b") {
+        state.escape = "start";
+      }
+      continue;
+    }
+
+    if (char === "\u001b") {
+      state.escape = "start";
+      continue;
+    }
+
+    if (state.pasting) {
+      // Newlines inside a paste are content, not a submitted command.
+      state.input += char === "\r" || char === "\n" ? " " : char;
+      continue;
+    }
+
+    if (char === "\r") {
+      const command = state.input.trim();
       state.input = "";
-    } else if (char === "\n" || char === "\u001b") {
+      if (command) {
+        void appendTerminalCommand(terminalId, command.slice(0, 4000));
+      }
+    } else if (char === "\u007f" || char === "\b") {
+      state.input = state.input.slice(0, -1);
+    } else if (char === "\u0003" || char === "\u0015") {
+      state.input = "";
+    } else if (char === "\u0017") {
+      state.input = state.input.replace(/\S+\s*$/, "");
+    } else if (char === "\n") {
       continue;
     } else if (char >= " " || char === "\t") {
       state.input += char;
     }
   }
+
   terminalInputStates.set(terminalId, state);
+}
+
+function newTerminalInputState(): TerminalInputState {
+  return { input: "", escape: "", sequence: "", pasting: false };
 }
 
 function shellQuote(value: string) {
