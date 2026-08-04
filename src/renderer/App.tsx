@@ -610,7 +610,8 @@ export default function App() {
       container: shellContainerRef.current,
       current: mountedShellRef.current,
       terminalId: activeShellTerminalId,
-      cwd: activeSession.repoPath,
+      // The shell belongs beside the agent, in the session's own worktree.
+      cwd: activeSession.worktreePath || activeSession.repoPath,
       command: shellCommand,
     });
 

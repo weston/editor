@@ -25,6 +25,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import * as pty from "node-pty";
@@ -1549,6 +1550,8 @@ function startTerminal(
 
   const size = normalizedTerminalSize(cols, rows);
   const shell = process.env.SHELL || "/bin/zsh";
+  // An archived session may no longer have its worktree on disk.
+  const startDir = existsSync(cwd) ? cwd : homedir();
   const shellCommand = command
     ? `stty cols ${size.cols} rows ${size.rows} 2>/dev/null || true; ${command}`
     : undefined;
@@ -1559,7 +1562,7 @@ function startTerminal(
       name: "xterm-256color",
       cols: size.cols,
       rows: size.rows,
-      cwd,
+      cwd: startDir,
       env: terminalEnv(terminalId, size),
     },
   );
