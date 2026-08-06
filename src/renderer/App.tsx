@@ -2513,7 +2513,17 @@ function commandForAgent(session: SessionRecord, profile: AgentProfile) {
   }
 
   if (profile.id === "codex") {
-    command = `codex --dangerously-bypass-approvals-and-sandbox ${shellQuote(terminalAccessPrompt(session.target))}`;
+    const base = "codex --dangerously-bypass-approvals-and-sandbox";
+    const prompt = shellQuote(terminalAccessPrompt(session.target));
+    // Codex cannot be handed a session id up front, but it records the
+    // working directory of every session, and each session has its own
+    // worktree — so the newest rollout for this directory is this session's.
+    // The prompt is only for a fresh start; resuming already has the context.
+    command = [
+      `codex_rollout=$(grep -rl --include='*.jsonl' -F "\\"cwd\\":\\"$PWD\\"" "$HOME/.codex/sessions" 2>/dev/null | sort | tail -1)`,
+      `codex_session=$(head -1 "$codex_rollout" 2>/dev/null | sed -n 's/.*"session_id":"\\([^"]*\\)".*/\\1/p')`,
+      `if [ -n "$codex_session" ]; then codex resume "$codex_session" --dangerously-bypass-approvals-and-sandbox; else ${base} ${prompt}; fi`,
+    ].join("\n");
   }
 
   if (session.target === "sailbox") {
