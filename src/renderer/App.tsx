@@ -889,12 +889,23 @@ export default function App() {
       return cached;
     }
 
-    const terminal = new Terminal({
+    const terminal: Terminal = new Terminal({
       cursorBlink: true,
       convertEol: false,
       fontFamily: '"SF Mono", Menlo, ui-monospace, monospace',
       fontSize: 12,
       scrollback: 100_000,
+      // Agents emit OSC 8 hyperlinks, which xterm would otherwise open with
+      // window.open — that becomes a browser window inside the app.
+      linkHandler: {
+        activate: (_event, uri) => {
+          if (terminal.hasSelection()) {
+            return;
+          }
+
+          openExternalUri(uri);
+        },
+      },
       theme: {
         background: "#171717",
         foreground: "#e7e7e7",
@@ -911,7 +922,7 @@ export default function App() {
           return;
         }
 
-        window.agentEditor.openExternal(uri).catch(() => undefined);
+        openExternalUri(uri);
       }),
     );
     terminal.attachCustomKeyEventHandler((event) =>
@@ -2768,6 +2779,15 @@ function shortcutLabel(target: ShortcutTarget) {
 // otherwise split on, so "Screenshot 1.png" arrives as one argument.
 function escapeDroppedPath(filePath: string) {
   return filePath.replace(/([ \t"'\\()[\]{}$`&;|*?<>!#~])/g, "\\$1");
+}
+
+// Terminal output is untrusted, so only hand the OS schemes it should open.
+function openExternalUri(uri: string) {
+  if (!/^(https?|mailto):/i.test(uri)) {
+    return;
+  }
+
+  window.agentEditor.openExternal(uri).catch(() => undefined);
 }
 
 function clipboardHasImage(data: DataTransfer | null) {

@@ -96,11 +96,33 @@ async function createWindow() {
     mainWindow = null;
   });
 
+  // Nothing should ever open a browser inside the app: hand links to the OS
+  // and keep the window itself on the app.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrl(url);
+    return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (url !== mainWindow?.webContents.getURL()) {
+      event.preventDefault();
+      openExternalUrl(url);
+    }
+  });
+
   if (process.env.VITE_DEV_SERVER_URL) {
     await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
     await mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
+}
+
+function openExternalUrl(url: string) {
+  if (!/^(https?|mailto):/i.test(url)) {
+    return;
+  }
+
+  void electronShell.openExternal(url).catch(() => undefined);
 }
 
 function statePath() {
